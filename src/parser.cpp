@@ -86,6 +86,18 @@ ASTNodePtr Parser::parseStatement() {
         case TokenType::USE: return parseImport();
         case TokenType::CONST: return parseConstDecl();
         case TokenType::ASSERT: return parseAssert();
+        case TokenType::YIELD: {
+            int line = current().line;
+            advance(); // skip 'yield'
+            auto node = std::make_shared<ASTNode>();
+            node->type = NodeType::YieldStmt;
+            node->line = line;
+            if (!check(TokenType::NEWLINE) && !check(TokenType::DEDENT) && !atEnd()) {
+                node->value = parseExpression();
+            }
+            expectNewlineOrEnd();
+            return node;
+        }
         case TokenType::SHAPE: return parseShapeDef();
         case TokenType::LBRACKET: {
             // Could be destructuring: [a, b, ...rest] = expr
@@ -242,7 +254,101 @@ ASTNodePtr Parser::parseGiven() {
         GivenBranch branch;
         if (check(TokenType::IF)) {
             advance(); // skip 'if'
-            branch.condition = parseExpression();
+
+            // Check for dict pattern: if {key: value, bind}:
+            if (check(TokenType::LBRACE)) {
+                size_t saved = pos;
+                advance(); // skip {
+                bool isPattern = false;
+                // A pattern has identifiers, optionally followed by ':' (with a value) or ','
+                if (check(TokenType::IDENTIFIER) || check(TokenType::RBRACE)) {
+                    size_t probe = pos;
+                    int depth = 1;
+                    while (probe < tokens.size() && depth > 0) {
+                        if (tokens[probe].type == TokenType::LBRACE) depth++;
+                        else if (tokens[probe].type == TokenType::RBRACE) depth--;
+                        if (depth == 0) break;
+                        probe++;
+                    }
+                    if (depth == 0 && probe + 1 < tokens.size() &&
+                        tokens[probe + 1].type == TokenType::COLON) {
+                        // Check if it's followed by a newline (pattern branch) vs `=` (dict literal assignment)
+                        // Actually, in given branch, after the pattern we expect ':' then newline
+                        // A dict LITERAL as condition ends with '==' or similar — so { ... } : is a pattern
+                        isPattern = true;
+                    }
+                }
+                pos = saved;
+                if (isPattern) {
+                    advance(); // skip {
+                    branch.patternKind = 1;
+                    while (!check(TokenType::RBRACE)) {
+                        Token key = expect(TokenType::IDENTIFIER, "Expected key in pattern");
+                        branch.patternKeys.push_back(key.value);
+                        // Optional value: key: literal
+                        if (match(TokenType::COLON)) {
+                            branch.patternValues.push_back(parseExpression());
+                            branch.patternBindings.push_back(""); // no binding, just match
+                        } else {
+                            branch.patternValues.push_back(nullptr); // just bind
+                            branch.patternBindings.push_back(key.value);
+                        }
+                        if (!check(TokenType::RBRACE)) {
+                            expect(TokenType::COMMA, "Expected ',' in pattern");
+                        }
+                    }
+                    expect(TokenType::RBRACE, "Expected '}'");
+                } else {
+                    branch.condition = parseExpression();
+                }
+            } else if (check(TokenType::LBRACKET)) {
+                // List pattern: if [a, b, ...rest]:
+                size_t saved = pos;
+                advance(); // skip [
+                bool isPattern = false;
+                if (check(TokenType::IDENTIFIER) || check(TokenType::DOT_DOT_DOT) || check(TokenType::RBRACKET)) {
+                    size_t probe = pos;
+                    int depth = 1;
+                    bool onlyIdentsAndCommas = true;
+                    while (probe < tokens.size() && depth > 0) {
+                        auto t = tokens[probe].type;
+                        if (t == TokenType::LBRACKET) depth++;
+                        else if (t == TokenType::RBRACKET) { depth--; if (depth == 0) break; }
+                        else if (t != TokenType::IDENTIFIER && t != TokenType::COMMA && t != TokenType::DOT_DOT_DOT) {
+                            onlyIdentsAndCommas = false;
+                            break;
+                        }
+                        probe++;
+                    }
+                    if (depth == 0 && onlyIdentsAndCommas &&
+                        probe + 1 < tokens.size() && tokens[probe + 1].type == TokenType::COLON) {
+                        isPattern = true;
+                    }
+                }
+                pos = saved;
+                if (isPattern) {
+                    advance(); // skip [
+                    branch.patternKind = 2;
+                    while (!check(TokenType::RBRACKET)) {
+                        if (match(TokenType::DOT_DOT_DOT)) {
+                            Token n = expect(TokenType::IDENTIFIER, "Expected name after '...'");
+                            branch.patternRestName = n.value;
+                        } else {
+                            Token n = expect(TokenType::IDENTIFIER, "Expected binding name");
+                            branch.patternBindings.push_back(n.value);
+                        }
+                        if (!check(TokenType::RBRACKET)) {
+                            expect(TokenType::COMMA, "Expected ','");
+                        }
+                    }
+                    expect(TokenType::RBRACKET, "Expected ']'");
+                } else {
+                    branch.condition = parseExpression();
+                }
+            } else {
+                branch.condition = parseExpression();
+            }
+
             expect(TokenType::COLON, "Expected ':' after given branch condition");
             expectNewlineOrEnd();
             branch.body = parseBlock();
@@ -832,7 +938,8 @@ ASTNodePtr Parser::parsePostfix() {
     auto expr = parsePrimary();
 
     while (true) {
-        if (check(TokenType::DOT)) {
+        if (check(TokenType::DOT) || check(TokenType::QUESTION_DOT)) {
+            bool isOptional = check(TokenType::QUESTION_DOT);
             int line = current().line;
             advance();
             Token memberTok = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
@@ -849,6 +956,7 @@ ASTNodePtr Parser::parsePostfix() {
                 memberAccess->type = NodeType::MemberAccess;
                 memberAccess->object = expr;
                 memberAccess->member = memberTok.value;
+                memberAccess->optionalChain = isOptional;
                 memberAccess->line = line;
                 node->callee = memberAccess;
 
@@ -866,6 +974,7 @@ ASTNodePtr Parser::parsePostfix() {
                 node->type = NodeType::MemberAccess;
                 node->object = expr;
                 node->member = memberTok.value;
+                node->optionalChain = isOptional;
                 node->line = line;
                 expr = node;
             }

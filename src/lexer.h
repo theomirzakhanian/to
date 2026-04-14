@@ -16,6 +16,8 @@ enum class TokenType {
     ASYNC, AWAIT,
     THEN, ASSERT, SHAPE, FITS, OPTIONS,
     DOT_DOT_DOT, // ...
+    YIELD,
+    QUESTION_DOT, // ?.
 
     // Operators
     PLUS, MINUS, STAR, SLASH, MODULO,

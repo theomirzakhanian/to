@@ -37,6 +37,7 @@ std::unordered_map<std::string, TokenType> Lexer::keywords = {
     {"shape", TokenType::SHAPE},
     {"fits", TokenType::FITS},
     {"options", TokenType::OPTIONS},
+    {"yield", TokenType::YIELD},
 };
 
 Lexer::Lexer(const std::string& source, const std::string& filename)
@@ -356,6 +357,11 @@ std::vector<Token> Lexer::tokenize() {
                 advance();
                 tokens.push_back(Token(TokenType::COLON, ":", line, startCol));
                 break;
+            case '?':
+                advance();
+                if (!atEnd() && current() == '.') { advance(); tokens.push_back(Token(TokenType::QUESTION_DOT, "?.", line, startCol)); }
+                else { throw ToError(filename, line, startCol, std::string("Unexpected character '?'"), "Use '?.' for optional chaining."); }
+                break;
             case ',':
                 advance();
                 tokens.push_back(Token(TokenType::COMMA, ",", line, startCol));
@@ -445,6 +451,8 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::FITS: return "FITS";
         case TokenType::OPTIONS: return "OPTIONS";
         case TokenType::DOT_DOT_DOT: return "DOT_DOT_DOT";
+        case TokenType::YIELD: return "YIELD";
+        case TokenType::QUESTION_DOT: return "QUESTION_DOT";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
         case TokenType::STAR: return "STAR";

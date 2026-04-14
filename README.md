@@ -249,6 +249,82 @@ print name   ~ Theo
 </details>
 
 <details>
+<summary><b>Pattern Matching</b></summary>
+
+&nbsp;
+
+Match on the shape of data, not just values:
+
+```
+given response:
+  if {status: 200, body}:
+    process(body)
+  if {status: 404}:
+    handle_not_found()
+  if {status, error}:
+    log(status, error)
+
+given items:
+  if [x]:
+    print "one: {x}"
+  if [first, ...rest]:
+    print "first is {first}, {rest.length} more"
+```
+
+</details>
+
+<details>
+<summary><b>Optional Chaining</b></summary>
+
+&nbsp;
+
+```
+~ Safely access properties through possibly-none values
+city = user?.address?.city     ~ none if any step is missing
+
+to find_user(id):
+  if id == 1:
+    return {name = "Theo"}
+  return none
+
+print find_user(1)?.name    ~ Theo
+print find_user(99)?.name   ~ none (no crash)
+```
+
+</details>
+
+<details>
+<summary><b>Generators (yield)</b></summary>
+
+&nbsp;
+
+Lazy, pause-and-resume functions:
+
+```
+to counter(start, stop):
+  i = start
+  while i < stop:
+    yield i
+    i = i + 1
+
+through counter(0, 5) as n:
+  print n             ~ 0, 1, 2, 3, 4
+
+~ Infinite generators work too — just break when done
+to naturals():
+  i = 0
+  while true:
+    yield i
+    i = i + 1
+
+through naturals() as n:
+  if n > 5: break
+  print n
+```
+
+</details>
+
+<details>
 <summary><b>Async / Await</b></summary>
 
 &nbsp;
@@ -452,6 +528,9 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 | Lambdas | `(x): x * 2` |
 | Pipes | `data then transform then output` |
 | Destructure | `[a, b] = list` / `{x, y} = dict` |
+| Pattern match | `given x: if {status: 200, body}: ...` |
+| Optional chain | `user?.address?.city` |
+| Generators | `to gen(): yield 1; yield 2` |
 | Async | `task = async work()` / `await task` |
 | Enums | `build Color as options: Red, Green, Blue` |
 | Shapes | `shape X: ...` / `build Y fits X: ...` |
@@ -474,7 +553,7 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 - Designed the To syntax and semantics from the ground up
 - Authored the core lexer, parser, and AST
 - Implemented the tree-walking interpreter, class system, and async runtime
-- Designed the pipe operator, shapes, enums, and type hint system
+- Designed the pipe operator, shapes, enums, pattern matching, generators, and type hint system
 - Built the VS Code extension grammar and feature set
 - Designed the package manager and module resolution
 

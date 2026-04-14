@@ -1,0 +1,42 @@
+~ Test: Optional chaining with ?.
+
+user1 = {name = "Theo", address = {city = "LA", zip = "90001"}}
+user2 = {name = "Alice"}
+user3 = none
+
+~ Basic chaining — works normally when not none
+print user1?.name
+print user1?.address?.city
+
+~ Short-circuit on missing field — but dict member access will error
+~ Optional chaining only helps with none values, not missing keys
+~ So for this to work, address must explicitly be none
+
+user_no_address = {name = "Bob", address = none}
+print user_no_address?.address?.city   ~ none (short-circuits)
+
+~ Chaining on none
+print user3?.name                       ~ none
+
+~ Chaining through a function call that may return none
+to find_user(id):
+  if id == 1:
+    return {name = "Theo", score = 95}
+  return none
+
+u = find_user(1)
+print u?.name       ~ Theo
+print u?.score      ~ 95
+
+missing = find_user(99)
+print missing?.name ~ none
+print missing?.score ~ none
+
+~ Chaining with method calls
+text = "Hello"
+print text?.upper()   ~ HELLO
+
+empty = none
+print empty?.upper()  ~ none
+
+print "Optional chaining tests passed!"

@@ -1,0 +1,56 @@
+~ Test: Generators with yield
+
+~ Simple finite generator
+to counter(start, stop):
+  i = start
+  while i < stop:
+    yield i
+    i = i + 1
+
+print "Counting:"
+through counter(0, 5) as n:
+  print "  {n}"
+
+~ Generator that produces squares
+to squares(n):
+  i = 1
+  while i <= n:
+    yield i * i
+    i = i + 1
+
+print "Squares:"
+through squares(5) as s:
+  print "  {s}"
+
+~ Collect generator values to list
+to fib(n):
+  a = 0
+  b = 1
+  count = 0
+  while count < n:
+    yield a
+    temp = a + b
+    a = b
+    b = temp
+    count = count + 1
+
+print "First 10 Fibonacci numbers:"
+gen = fib(10)
+all = gen.to_list()
+print all
+
+~ Manual iteration with .next()
+print "Manual iteration:"
+g = counter(10, 13)
+print g.next()
+print g.next()
+print g.next()
+
+~ Break out of a generator loop
+print "Break at 3:"
+through counter(0, 100) as n:
+  if n == 3:
+    break
+  print "  {n}"
+
+print "Generator tests passed!"

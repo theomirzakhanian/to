@@ -10,6 +10,8 @@
 #include <thread>
 #include <future>
 #include <mutex>
+#include <condition_variable>
+#include <atomic>
 #include "ast.h"
 
 // Forward declarations
@@ -28,6 +30,7 @@ struct ToFunction {
     std::string returnTypeHint;
     std::vector<ASTNodePtr> body;
     EnvPtr closure;
+    bool isGenerator = false; // set if body contains 'yield'
 };
 
 struct ToClass {
@@ -42,8 +45,21 @@ struct ToInstance {
     std::unordered_map<std::string, ToValuePtr> fields;
 };
 
+// Generator — backed by a coroutine-style thread that pauses on yield
+struct ToGenerator {
+    std::shared_ptr<std::thread> thread;
+    std::shared_ptr<std::mutex> mtx;
+    std::shared_ptr<std::condition_variable> cv;
+    std::shared_ptr<std::shared_ptr<ToValue>> currentValue; // the yielded value
+    std::shared_ptr<std::atomic<bool>> hasValue;             // set true when producer yields
+    std::shared_ptr<std::atomic<bool>> consumerReady;        // set true when consumer asks for next
+    std::shared_ptr<std::atomic<bool>> done;                 // producer finished
+    std::shared_ptr<std::string> error;                      // error message if thrown
+    ~ToGenerator();
+};
+
 struct ToValue {
-    enum class Type { INT, FLOAT, STRING, BOOL, NONE, LIST, DICT, FUNCTION, BUILTIN, CLASS, INSTANCE, FUTURE };
+    enum class Type { INT, FLOAT, STRING, BOOL, NONE, LIST, DICT, FUNCTION, BUILTIN, CLASS, INSTANCE, FUTURE, GENERATOR };
     Type type;
 
     int64_t intVal = 0;
@@ -57,6 +73,7 @@ struct ToValue {
     std::shared_ptr<ToClass> classVal;
     std::shared_ptr<ToInstance> instanceVal;
     std::shared_ptr<std::future<ToValuePtr>> futureVal;
+    std::shared_ptr<ToGenerator> generatorVal;
 
     // Factory methods
     static ToValuePtr makeInt(int64_t v) {
@@ -130,6 +147,12 @@ struct ToValue {
         val->futureVal = std::move(f);
         return val;
     }
+    static ToValuePtr makeGenerator(std::shared_ptr<ToGenerator> g) {
+        auto val = std::make_shared<ToValue>();
+        val->type = Type::GENERATOR;
+        val->generatorVal = std::move(g);
+        return val;
+    }
 
     // Convert to string for printing
     std::string toString() const {
@@ -175,6 +198,7 @@ struct ToValue {
             case Type::CLASS: return "<class " + classVal->name + ">";
             case Type::INSTANCE: return "<instance of " + instanceVal->klass->name + ">";
             case Type::FUTURE: return "<future>";
+            case Type::GENERATOR: return "<generator>";
         }
         return "<unknown>";
     }
@@ -207,6 +231,7 @@ struct ToValue {
             case Type::CLASS: return "class";
             case Type::INSTANCE: return "instance";
             case Type::FUTURE: return "future";
+            case Type::GENERATOR: return "generator";
         }
         return "unknown";
     }

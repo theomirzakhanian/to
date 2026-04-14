@@ -1,3 +1,15 @@
 #include "environment.h"
-// Environment is header-only (all inline), but we need this translation unit
-// for the linker. Additional environment utilities can go here if needed.
+
+ToGenerator::~ToGenerator() {
+    // Signal the thread to exit cleanly
+    if (thread && thread->joinable()) {
+        if (done) *done = true;
+        if (consumerReady) *consumerReady = true;
+        if (cv) cv->notify_all();
+        try {
+            thread->join();
+        } catch (...) {
+            // ignore
+        }
+    }
+}

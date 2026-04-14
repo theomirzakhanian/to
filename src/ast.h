@@ -19,7 +19,7 @@ enum class NodeType {
     MemberAccess, StringInterpolation, LambdaExpr, AsyncExpr, AwaitExpr, PipeExpr,
 
     // Statements
-    Assignment, ConstDecl, PrintStmt, ReturnStmt,
+    Assignment, ConstDecl, PrintStmt, ReturnStmt, YieldStmt,
     BreakStmt, ContinueStmt, ExpressionStmt, AssertStmt,
     DestructureList, DestructureDict,
 
@@ -40,7 +40,16 @@ struct DictEntry {
 
 // Given branch
 struct GivenBranch {
-    ASTNodePtr condition; // null for else branch
+    ASTNodePtr condition; // null for else branch, or value to compare
+    // For pattern destructuring branches:
+    // patternKind 0 = no pattern (standard value match)
+    // patternKind 1 = dict pattern {key: value, bind}
+    // patternKind 2 = list pattern [a, b, ...rest]
+    int patternKind = 0;
+    std::vector<std::string> patternBindings; // names to bind on match
+    std::vector<std::string> patternKeys;      // dict keys (for dict patterns)
+    std::vector<ASTNodePtr> patternValues;      // literal values for dict keys (null = bind only)
+    std::string patternRestName;                // ...rest
     std::vector<ASTNodePtr> body;
 };
 
@@ -95,6 +104,7 @@ struct ASTNode {
     // For member access: object.member
     ASTNodePtr object;
     std::string member;
+    bool optionalChain = false; // true for ?. access
 
     // For index access: list[index]
     ASTNodePtr indexExpr;

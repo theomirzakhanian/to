@@ -22,6 +22,10 @@ public:
     EnvPtr getGlobalEnv() { return globalEnv; }
     ToValuePtr callFunction(ToValuePtr callee, const std::vector<ToValuePtr>& args, int line);
 
+    // Generator support
+    ToValuePtr createGenerator(std::shared_ptr<ToFunction> func, const std::vector<ToValuePtr>& args);
+    ToValuePtr nextGeneratorValue(ToValuePtr gen);
+
     // Call stack for stack traces (mutex-protected for async)
     std::vector<StackFrame> callStack;
     std::mutex callStackMutex;
@@ -81,4 +85,11 @@ class ReturnException : public std::exception {
 public:
     ToValuePtr value;
     explicit ReturnException(ToValuePtr v) : value(std::move(v)) {}
+};
+
+// Yield signal (raised inside a generator function body)
+class YieldSignal : public std::exception {
+public:
+    ToValuePtr value;
+    explicit YieldSignal(ToValuePtr v) : value(std::move(v)) {}
 };

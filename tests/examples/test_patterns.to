@@ -1,0 +1,54 @@
+~ Test: Pattern destructuring in given
+
+~ Dict pattern matching
+to handle_response(resp):
+  given resp:
+    if {status: 200, body}:
+      print "Success: {body}"
+    if {status: 404}:
+      print "Not found"
+    if {status, error}:
+      print "Failed ({status}): {error}"
+    else:
+      print "Unknown response"
+
+handle_response({status = 200, body = "Hello!"})
+handle_response({status = 404, body = "page not found"})
+handle_response({status = 500, error = "server exploded"})
+handle_response("not a dict")
+
+~ List pattern matching
+to describe(list):
+  given list:
+    if []:
+      print "empty"
+    if [x]:
+      print "one element: {x}"
+    if [x, y]:
+      print "two: {x}, {y}"
+    if [first, ...rest]:
+      print "first={first}, rest has {rest.length} items"
+    else:
+      print "something else"
+
+~ Note: [] only matches lists; add a literal [] branch
+describe([])       ~ actually this won't match [] since we don't have a [] pattern
+describe([42])
+describe([1, 2])
+describe([1, 2, 3, 4, 5])
+
+~ Nested access works with bindings
+to process(req):
+  given req:
+    if {kind: "login", user}:
+      print "Login attempt by {user}"
+    if {kind: "logout"}:
+      print "Logout"
+    else:
+      print "Unknown request"
+
+process({kind = "login", user = "theo"})
+process({kind = "logout"})
+process({kind = "delete"})
+
+print "Pattern tests passed!"

@@ -1,13 +1,14 @@
 # Table of contents
 
-## Getting Started
+* [Welcome](README.md)
+
+## 🌱 Learn To (Beginner)
+
+_Start here. Go in order. By the end, you can write real programs._
 
 * [Installation](getting-started/installation.md)
 * [Your First Program](getting-started/first-program.md)
 * [CLI Reference](getting-started/cli.md)
-
-## Language Guide
-
 * [Variables & Types](guide/variables.md)
 * [Functions](guide/functions.md)
 * [Control Flow](guide/control-flow.md)
@@ -16,18 +17,23 @@
 * [Error Handling](guide/errors.md)
 * [Modules & Imports](guide/modules.md)
 
-## Advanced
+## 🚀 Master To (Advanced)
+
+_Once you're comfortable with the basics, these features unlock the full power of the language._
 
 * [Lambdas & Closures](advanced/lambdas.md)
 * [Pipe Operator](advanced/pipes.md)
 * [Destructuring](advanced/destructuring.md)
+* [Pattern Matching](advanced/pattern-matching.md)
+* [Optional Chaining](advanced/optional-chaining.md)
+* [Generators (yield)](advanced/generators.md)
 * [Async & Await](advanced/async.md)
 * [Enums (Options)](advanced/enums.md)
 * [Shapes (Traits)](advanced/shapes.md)
 * [Type Hints](advanced/types.md)
 * [Testing](advanced/testing.md)
 
-## Standard Library
+## 📚 Standard Library
 
 * [math](stdlib/math.md)
 * [time](stdlib/time.md)
@@ -37,7 +43,7 @@
 * [json](stdlib/json.md)
 * [ffi (C interop)](stdlib/ffi.md)
 
-## Tooling
+## 🛠 Tooling
 
 * [VS Code Extension](tooling/vscode.md)
 * [Debugger](tooling/debugger.md)

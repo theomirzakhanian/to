@@ -17,6 +17,12 @@ Interpreter::Interpreter(const std::string& filename)
     registerBuiltins(globalEnv);
 }
 
+// Thread-local state: the generator currently producing values in this thread
+thread_local std::shared_ptr<ToGenerator> currentGenerator = nullptr;
+
+// Forward decl
+static bool containsYield(const std::vector<ASTNodePtr>& stmts);
+
 void Interpreter::pushFrame(const std::string& name, const std::string& file, int line) {
     std::lock_guard<std::mutex> lock(callStackMutex);
     callStack.push_back({name, file, line});
@@ -228,6 +234,30 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
             }
             break;
         }
+        case NodeType::YieldStmt: {
+            ToValuePtr val = node->value ? eval(node->value, env) : ToValue::makeNone();
+            if (!currentGenerator) {
+                throw ToRuntimeError("'yield' outside of a generator function", node->line);
+            }
+            auto& gen = currentGenerator;
+            {
+                std::unique_lock<std::mutex> lock(*gen->mtx);
+                *gen->currentValue = val;
+                *gen->hasValue = true;
+                *gen->consumerReady = false;
+            }
+            gen->cv->notify_all();
+            // Wait for consumer to ask for next
+            {
+                std::unique_lock<std::mutex> lock(*gen->mtx);
+                gen->cv->wait(lock, [&gen]() { return (bool)*gen->consumerReady || (bool)*gen->done; });
+            }
+            if (*gen->done) {
+                // Generator was abandoned — stop execution
+                throw ReturnException(ToValue::makeNone());
+            }
+            break;
+        }
         case NodeType::ReturnStmt: {
             ToValuePtr val = node->value ? eval(node->value, env) : ToValue::makeNone();
             throw ReturnException(val);
@@ -371,13 +401,78 @@ void Interpreter::execGiven(ASTNodePtr node, EnvPtr env) {
     auto val = eval(node->givenExpr, env);
 
     for (auto& branch : node->givenBranches) {
-        if (!branch.condition) {
-            // else branch
+        // else branch
+        if (!branch.condition && branch.patternKind == 0) {
             execBlock(branch.body, env);
             return;
         }
+
+        // Dict pattern: {key: value, bind}
+        if (branch.patternKind == 1) {
+            if (val->type != ToValue::Type::DICT) continue;
+            bool match = true;
+            auto branchEnv = env->createChild();
+            for (size_t i = 0; i < branch.patternKeys.size(); i++) {
+                const std::string& k = branch.patternKeys[i];
+                ToValuePtr foundVal;
+                for (auto& p : val->dictVal) {
+                    if (p.first == k) { foundVal = p.second; break; }
+                }
+                if (!foundVal) { match = false; break; }
+
+                // If there's an expected value, compare
+                if (branch.patternValues[i]) {
+                    auto expected = eval(branch.patternValues[i], env);
+                    bool eq = false;
+                    if (foundVal->type == expected->type) {
+                        switch (foundVal->type) {
+                            case ToValue::Type::INT: eq = foundVal->intVal == expected->intVal; break;
+                            case ToValue::Type::FLOAT: eq = foundVal->floatVal == expected->floatVal; break;
+                            case ToValue::Type::STRING: eq = foundVal->strVal == expected->strVal; break;
+                            case ToValue::Type::BOOL: eq = foundVal->boolVal == expected->boolVal; break;
+                            default: eq = false;
+                        }
+                    }
+                    if (!eq) { match = false; break; }
+                }
+                // Bind if there's a binding name
+                if (!branch.patternBindings[i].empty()) {
+                    branchEnv->define(branch.patternBindings[i], foundVal);
+                }
+            }
+            if (match) {
+                for (auto& stmt : branch.body) execStatement(stmt, branchEnv);
+                return;
+            }
+            continue;
+        }
+
+        // List pattern: [a, b, ...rest]
+        if (branch.patternKind == 2) {
+            if (val->type != ToValue::Type::LIST) continue;
+            auto& list = val->listVal;
+            size_t fixedCount = branch.patternBindings.size();
+            // With rest: need >= fixedCount. Without rest: need exactly fixedCount
+            if (branch.patternRestName.empty()) {
+                if (list.size() != fixedCount) continue;
+            } else {
+                if (list.size() < fixedCount) continue;
+            }
+            auto branchEnv = env->createChild();
+            for (size_t i = 0; i < fixedCount; i++) {
+                branchEnv->define(branch.patternBindings[i], list[i]);
+            }
+            if (!branch.patternRestName.empty()) {
+                std::vector<ToValuePtr> rest;
+                for (size_t i = fixedCount; i < list.size(); i++) rest.push_back(list[i]);
+                branchEnv->define(branch.patternRestName, ToValue::makeList(std::move(rest)));
+            }
+            for (auto& stmt : branch.body) execStatement(stmt, branchEnv);
+            return;
+        }
+
+        // Standard value match
         auto branchVal = eval(branch.condition, env);
-        // Compare
         bool match = false;
         if (val->type == branchVal->type) {
             switch (val->type) {
@@ -425,6 +520,27 @@ void Interpreter::execThrough(ASTNodePtr node, EnvPtr env) {
         for (char c : iterable->strVal) {
             items.push_back(ToValue::makeString(std::string(1, c)));
         }
+    } else if (iterable->type == ToValue::Type::GENERATOR) {
+        // Lazy iteration over a generator
+        while (true) {
+            auto v = nextGeneratorValue(iterable);
+            if (*iterable->generatorVal->done && !*iterable->generatorVal->hasValue) break;
+            auto loopEnv = env->createChild();
+            loopEnv->define(node->loopVar, v);
+            try {
+                for (auto& stmt : node->body) {
+                    execStatement(stmt, loopEnv);
+                }
+            } catch (BreakSignal&) {
+                // Signal generator to stop
+                *iterable->generatorVal->done = true;
+                iterable->generatorVal->cv->notify_all();
+                return;
+            } catch (ContinueSignal&) {
+                continue;
+            }
+        }
+        return;
     } else {
         throw ToRuntimeError("Cannot iterate over " + iterable->typeName(), node->line);
     }
@@ -452,6 +568,7 @@ void Interpreter::execFunctionDef(ASTNodePtr node, EnvPtr env) {
     func->returnTypeHint = node->returnTypeHint;
     func->body = node->body;
     func->closure = env;
+    func->isGenerator = containsYield(node->body);
     env->define(node->name, ToValue::makeFunction(func));
 }
 
@@ -926,6 +1043,28 @@ ToValuePtr Interpreter::evalCallExpr(ASTNodePtr node, EnvPtr env) {
         auto obj = eval(node->callee->object, env);
         std::string method = node->callee->member;
 
+        // Optional chaining on method call: obj?.method() returns none if obj is none
+        if (node->callee->optionalChain && obj->type == ToValue::Type::NONE) {
+            return ToValue::makeNone();
+        }
+
+        // Generator methods
+        if (obj->type == ToValue::Type::GENERATOR) {
+            if (method == "next") {
+                return nextGeneratorValue(obj);
+            }
+            if (method == "to_list") {
+                std::vector<ToValuePtr> all;
+                while (true) {
+                    auto v = nextGeneratorValue(obj);
+                    if (v->type == ToValue::Type::NONE && *obj->generatorVal->done) break;
+                    all.push_back(v);
+                }
+                return ToValue::makeList(std::move(all));
+            }
+            throw ToRuntimeError("Generator has no method '" + method + "'");
+        }
+
         // List methods
         if (obj->type == ToValue::Type::LIST) {
             return callListMethod(obj, method, args);
@@ -1002,6 +1141,12 @@ ToValuePtr Interpreter::callFunction(ToValuePtr callee, const std::vector<ToValu
                 std::to_string(func->params.size()) + " arguments, got " +
                 std::to_string(args.size()), line);
         }
+
+        // If this is a generator function, return a generator instead of running the body
+        if (func->isGenerator) {
+            return createGenerator(func, args);
+        }
+
         // Type-check arguments if hints are present
         for (size_t i = 0; i < func->paramTypes.size(); i++) {
             auto& hint = func->paramTypes[i];
@@ -1104,6 +1249,11 @@ ToValuePtr Interpreter::callFunction(ToValuePtr callee, const std::vector<ToValu
 
 ToValuePtr Interpreter::evalMemberAccess(ASTNodePtr node, EnvPtr env) {
     auto obj = eval(node->object, env);
+
+    // Optional chaining: return none if object is none
+    if (node->optionalChain && obj->type == ToValue::Type::NONE) {
+        return ToValue::makeNone();
+    }
 
     // Instance field access
     if (obj->type == ToValue::Type::INSTANCE) {
@@ -1462,4 +1612,128 @@ void Interpreter::registerJsonModule(EnvPtr env) {
     )});
 
     env->define("json", jsonModule);
+}
+
+// ========================
+// Generator support
+// ========================
+
+ToValuePtr Interpreter::createGenerator(std::shared_ptr<ToFunction> func, const std::vector<ToValuePtr>& args) {
+    auto gen = std::make_shared<ToGenerator>();
+    gen->mtx = std::make_shared<std::mutex>();
+    gen->cv = std::make_shared<std::condition_variable>();
+    gen->currentValue = std::make_shared<std::shared_ptr<ToValue>>(nullptr);
+    gen->hasValue = std::make_shared<std::atomic<bool>>(false);
+    gen->consumerReady = std::make_shared<std::atomic<bool>>(false);
+    gen->done = std::make_shared<std::atomic<bool>>(false);
+    gen->error = std::make_shared<std::string>("");
+
+    Interpreter* self = this;
+    gen->thread = std::make_shared<std::thread>([self, gen, func, args]() {
+        currentGenerator = gen;
+
+        try {
+            // Wait for first call to next()
+            {
+                std::unique_lock<std::mutex> lock(*gen->mtx);
+                gen->cv->wait(lock, [&gen]() { return (bool)*gen->consumerReady || (bool)*gen->done; });
+            }
+            if (*gen->done) {
+                currentGenerator = nullptr;
+                return;
+            }
+
+            // Create function environment
+            auto funcEnv = func->closure->createChild();
+            if (args.size() != func->params.size()) {
+                *gen->error = "Generator expects " + std::to_string(func->params.size()) +
+                    " arguments, got " + std::to_string(args.size());
+            } else {
+                for (size_t i = 0; i < func->params.size(); i++) {
+                    funcEnv->define(func->params[i], args[i]);
+                }
+                try {
+                    for (auto& stmt : func->body) {
+                        self->execStatement(stmt, funcEnv);
+                    }
+                } catch (ReturnException&) {
+                    // generator returned early
+                } catch (ToRuntimeError& e) {
+                    *gen->error = e.detail;
+                } catch (std::exception& e) {
+                    *gen->error = e.what();
+                }
+            }
+        } catch (...) {
+            *gen->error = "unknown error in generator";
+        }
+
+        // Signal completion
+        {
+            std::unique_lock<std::mutex> lock(*gen->mtx);
+            *gen->done = true;
+            *gen->hasValue = false;
+        }
+        gen->cv->notify_all();
+        currentGenerator = nullptr;
+    });
+
+    return ToValue::makeGenerator(gen);
+}
+
+ToValuePtr Interpreter::nextGeneratorValue(ToValuePtr genVal) {
+    auto& gen = genVal->generatorVal;
+    if (*gen->done) return ToValue::makeNone();
+
+    // Signal producer to continue
+    {
+        std::unique_lock<std::mutex> lock(*gen->mtx);
+        *gen->hasValue = false;
+        *gen->consumerReady = true;
+    }
+    gen->cv->notify_all();
+
+    // Wait for a value or done
+    ToValuePtr val;
+    {
+        std::unique_lock<std::mutex> lock(*gen->mtx);
+        gen->cv->wait(lock, [&gen]() { return (bool)*gen->hasValue || (bool)*gen->done; });
+        if (*gen->hasValue) {
+            val = *gen->currentValue;
+        } else {
+            val = ToValue::makeNone();
+        }
+    }
+
+    // Check for errors from the producer
+    if (!gen->error->empty()) {
+        std::string err = *gen->error;
+        *gen->error = "";
+        throw ToRuntimeError(err);
+    }
+
+    return val ? val : ToValue::makeNone();
+}
+
+
+// Check if a block of statements contains a yield anywhere (recursively)
+static bool containsYield(const std::vector<ASTNodePtr>& stmts);
+static bool nodeContainsYield(ASTNodePtr node) {
+    if (!node) return false;
+    if (node->type == NodeType::YieldStmt) return true;
+    // Don't recurse into nested function/class definitions
+    if (node->type == NodeType::FunctionDef || node->type == NodeType::ClassDef ||
+        node->type == NodeType::LambdaExpr) return false;
+    if (containsYield(node->body)) return true;
+    if (containsYield(node->elseBody)) return true;
+    if (containsYield(node->tryBody)) return true;
+    if (containsYield(node->catchClause.body)) return true;
+    if (containsYield(node->finallyBody)) return true;
+    for (auto& br : node->orBranches) if (containsYield(br.body)) return true;
+    for (auto& br : node->givenBranches) if (containsYield(br.body)) return true;
+    return false;
+}
+static bool containsYield(const std::vector<ASTNodePtr>& stmts) {
+    for (auto& s : stmts) if (nodeContainsYield(s)) return true;
+    return false;
 }
