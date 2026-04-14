@@ -1,0 +1,187 @@
+~ Stress test: Edge cases and tricky syntax
+
+~ Empty list and dict
+empty_list = []
+empty_dict = {}
+print "Empty list: {empty_list}"
+print "Empty list length: {empty_list.length}"
+
+~ Single element list
+single = [42]
+print "Single: {single}"
+
+~ Nested lists
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+print "Matrix[1][2]: {matrix[1][2]}"
+
+~ Negative indexing
+items = [10, 20, 30, 40, 50]
+print "Last: {items[-1]}"
+print "Second to last: {items[-2]}"
+
+~ String edge cases
+empty_str = ""
+print "Empty string length: {len(empty_str)}"
+print "Empty string truthy: {empty_str == ""}"
+
+special = "quotes \" and backslash \\ and newline"
+print special
+
+~ Chained comparisons via and
+x = 5
+if x > 0 and x < 10:
+  print "x is between 0 and 10"
+
+~ Boolean expressions
+a = true
+b = false
+print "true and false: {a and b}"
+print "true or false: {a or b}"
+print "not true: {not a}"
+print "not false: {not b}"
+
+~ Truthy/falsy values
+if 0:
+  print "FAIL: 0 is truthy"
+else:
+  print "OK: 0 is falsy"
+
+if "":
+  print "FAIL: empty string is truthy"
+else:
+  print "OK: empty string is falsy"
+
+if []:
+  print "FAIL: empty list is truthy"
+else:
+  print "OK: empty list is falsy"
+
+if 1:
+  print "OK: 1 is truthy"
+
+if "hello":
+  print "OK: non-empty string is truthy"
+
+if [1]:
+  print "OK: non-empty list is truthy"
+
+~ None handling
+nothing = none
+print "None: {nothing}"
+if nothing:
+  print "FAIL: none is truthy"
+else:
+  print "OK: none is falsy"
+
+~ Compound assignment operators
+counter = 0
+counter += 5
+print "After +=5: {counter}"
+counter -= 2
+print "After -=2: {counter}"
+counter *= 3
+print "After *=3: {counter}"
+counter /= 3
+print "After /=3: {counter}"
+
+~ String concatenation with +
+greeting = "Hello" + ", " + "World" + "!"
+print greeting
+
+~ Mixed type string interpolation
+x = 42
+pi = 3.14
+flag = true
+print "int={x} float={pi} bool={flag} none={nothing}"
+
+~ While with break
+i = 0
+while true:
+  if i >= 5:
+    break
+  i = i + 1
+print "Broke at: {i}"
+
+~ While with continue
+sum = 0
+i = 0
+while i < 10:
+  i = i + 1
+  if i % 2 == 0:
+    continue
+  sum = sum + i
+print "Sum of odds 1-9: {sum}"
+
+~ Nested through loops
+pairs = []
+through 1..4 as i:
+  through 1..4 as j:
+    if i != j:
+      pairs.add("{i},{j}")
+print "Pairs: {pairs}"
+
+~ Function returning function result
+to outer():
+  return inner()
+
+to inner():
+  return 42
+
+print "Nested call: {outer()}"
+
+~ Multiple return paths
+to classify(n):
+  if n > 0:
+    return "positive"
+  or n < 0:
+    return "negative"
+  else:
+    return "zero"
+
+print classify(5)
+print classify(-3)
+print classify(0)
+
+~ Error in try block with complex expressions
+try:
+  list = [1, 2, 3]
+  val = list[99]
+catch error:
+  print "Caught index error: {error}"
+
+try:
+  x = "hello" - 5
+catch error:
+  print "Caught type error: {error}"
+
+~ Dict with many entries
+config = {
+  host = "localhost",
+  port = 8080,
+  debug = true,
+  name = "MyApp",
+  version = "1.0"
+}
+print "Config: {config.host}:{config.port}"
+print "Debug: {config.debug}"
+
+~ List of dicts
+users = [
+  {name = "Alice", age = 30},
+  {name = "Bob", age = 25},
+  {name = "Charlie", age = 35}
+]
+through users as user:
+  print "{user.name} is {user.age}"
+
+~ Reassigning different types to same variable
+x = 5
+print "x as int: {x}"
+x = "now a string"
+print "x as string: {x}"
+x = [1, 2, 3]
+print "x as list: {x}"
+x = true
+print "x as bool: {x}"
+
+print "All edge case tests passed!"

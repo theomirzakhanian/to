@@ -1,0 +1,136 @@
+~ Stress test: Deep nesting, complex class hierarchies, closures
+
+build Vector:
+  to init(x, y):
+    my.x = x
+    my.y = y
+
+  to add(other):
+    return Vector(my.x + other.x, my.y + other.y)
+
+  to scale(factor):
+    return Vector(my.x * factor, my.y * factor)
+
+  to magnitude():
+    return (my.x * my.x + my.y * my.y)
+
+  to show():
+    print "({my.x}, {my.y})"
+
+build Matrix:
+  to init():
+    my.rows = []
+
+  to add_row(row):
+    my.rows.add(row)
+
+  to get(r, c):
+    return my.rows[r][c]
+
+  to size():
+    return my.rows.length
+
+  to show():
+    through my.rows as row:
+      text = ""
+      through row as val:
+        text = text + str(val) + " "
+      print text
+
+~ Test vector operations
+v1 = Vector(3, 4)
+v2 = Vector(1, 2)
+v3 = v1.add(v2)
+v3.show()
+print "Magnitude squared: {v1.magnitude()}"
+
+v4 = v1.scale(3)
+v4.show()
+
+~ Test matrix
+m = Matrix()
+m.add_row([1, 2, 3])
+m.add_row([4, 5, 6])
+m.add_row([7, 8, 9])
+print "Matrix:"
+m.show()
+print "Element [1][2]: {m.get(1, 2)}"
+
+~ Nested conditionals inside loops inside functions
+to classify_numbers(numbers):
+  results = {positives = 0, negatives = 0, zeros = 0}
+  through numbers as n:
+    if n > 0:
+      results.positives = results.positives + 1
+    or n < 0:
+      results.negatives = results.negatives + 1
+    else:
+      results.zeros = results.zeros + 1
+  return results
+
+nums = [5, -3, 0, 12, -7, 0, 8, -1, 0, 42]
+counts = classify_numbers(nums)
+print "Positives: {counts.positives}"
+print "Negatives: {counts.negatives}"
+print "Zeros: {counts.zeros}"
+
+~ Recursive data structure simulation
+to make_node(value, children):
+  return {value = value, children = children}
+
+to tree_sum(node):
+  total = node.value
+  through node.children as child:
+    total = total + tree_sum(child)
+  return total
+
+to tree_depth(node):
+  if node.children.length == 0:
+    return 1
+  max_d = 0
+  through node.children as child:
+    d = tree_depth(child)
+    if d > max_d:
+      max_d = d
+  return max_d + 1
+
+tree = make_node(1, [
+  make_node(2, [
+    make_node(4, []),
+    make_node(5, [])
+  ]),
+  make_node(3, [
+    make_node(6, [
+      make_node(7, [])
+    ])
+  ])
+])
+
+print "Tree sum: {tree_sum(tree)}"
+print "Tree depth: {tree_depth(tree)}"
+
+~ Deeply nested given inside if inside through
+to analyze(items):
+  through items as item:
+    if item.score >= 90:
+      given item.category
+        if "math":
+          print "{item.name}: Math genius!"
+        if "science":
+          print "{item.name}: Science star!"
+        else:
+          print "{item.name}: Top performer!"
+    or item.score >= 70:
+      print "{item.name}: Good job"
+    else:
+      print "{item.name}: Needs improvement"
+
+students = [
+  {name = "Alice", score = 95, category = "math"},
+  {name = "Bob", score = 72, category = "science"},
+  {name = "Charlie", score = 91, category = "science"},
+  {name = "Diana", score = 55, category = "math"},
+  {name = "Eve", score = 98, category = "art"}
+]
+
+analyze(students)

@@ -1,0 +1,49 @@
+~ Test: Async/Await
+
+~ Simulate a slow computation
+to slow_square(x: int) -> int:
+  ~ Busy wait to simulate work
+  i = 0
+  while i < 1000000:
+    i = i + 1
+  return x * x
+
+to slow_add(a: int, b: int) -> int:
+  i = 0
+  while i < 1000000:
+    i = i + 1
+  return a + b
+
+~ Run two tasks concurrently
+print "Starting async tasks..."
+
+task1 = async slow_square(7)
+task2 = async slow_square(8)
+task3 = async slow_add(10, 20)
+
+print "Tasks launched, awaiting results..."
+
+r1 = await task1
+r2 = await task2
+r3 = await task3
+
+print "7^2 = {r1}"
+print "8^2 = {r2}"
+print "10 + 20 = {r3}"
+
+~ Await on a non-future just returns the value
+x = await 42
+print "await 42 = {x}"
+
+~ Multiple async in a loop
+results = []
+tasks = []
+through 1..6 as n:
+  tasks.add(async slow_square(n))
+
+through tasks as t:
+  results.add(await t)
+
+print "Squares 1-5: {results}"
+
+print "Async tests passed!"

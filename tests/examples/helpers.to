@@ -1,0 +1,8 @@
+to greet(name):
+  print "Hey, {name}!"
+
+to add(x, y):
+  return x + y
+
+to double(x):
+  return x * 2

@@ -1,0 +1,132 @@
+~ Stress test: Higher-order functions, closures, callbacks
+
+~ Functions as values
+to apply(func, value):
+  return func(value)
+
+to double(x):
+  return x * 2
+
+to square(x):
+  return x * x
+
+to negate(x):
+  return -x
+
+print apply(double, 5)
+print apply(square, 5)
+print apply(negate, 5)
+
+~ Map implementation
+to map(list, func):
+  result = []
+  through list as item:
+    result.add(func(item))
+  return result
+
+~ Filter implementation
+to filter(list, func):
+  result = []
+  through list as item:
+    if func(item):
+      result.add(item)
+  return result
+
+~ Reduce implementation
+to reduce(list, func, initial):
+  acc = initial
+  through list as item:
+    acc = func(acc, item)
+  return acc
+
+to add(a, b):
+  return a + b
+
+to is_even(x):
+  return x % 2 == 0
+
+to is_positive(x):
+  return x > 0
+
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+doubled = map(numbers, double)
+print "Doubled: {doubled}"
+
+squared = map(numbers, square)
+print "Squared: {squared}"
+
+evens = filter(numbers, is_even)
+print "Evens: {evens}"
+
+total = reduce(numbers, add, 0)
+print "Sum: {total}"
+
+~ Chain operations
+mixed = [-5, 3, -2, 8, -1, 6, 0, -4, 7, 2]
+positive_doubled = map(filter(mixed, is_positive), double)
+print "Positive doubled: {positive_doubled}"
+
+~ Sorting (bubble sort)
+to sort(list):
+  n = list.length
+  i = 0
+  while i < n:
+    j = 0
+    while j < n - i - 1:
+      if list[j] > list[j + 1]:
+        temp = list[j]
+        list[j] = list[j + 1]
+        list[j + 1] = temp
+      j = j + 1
+    i = i + 1
+  return list
+
+unsorted = [64, 34, 25, 12, 22, 11, 90]
+print "Before sort: {unsorted}"
+sorted_list = sort(unsorted)
+print "After sort: {sorted_list}"
+
+~ String processing pipeline
+to count_words(text):
+  words = text.split(" ")
+  return words.length
+
+to reverse_string(s):
+  result = ""
+  i = len(s) - 1
+  while i >= 0:
+    result = result + s[i]
+    i = i - 1
+  return result
+
+to is_palindrome(s):
+  lower = s.lower()
+  return lower == reverse_string(lower)
+
+words = ["racecar", "hello", "madam", "world", "level", "python"]
+through words as w:
+  if is_palindrome(w):
+    print "{w} is a palindrome"
+  else:
+    print "{w} is not a palindrome"
+
+~ Fibonacci with memoization using dict
+to make_fib_cache():
+  return {cache = {}}
+
+to fib_memo(n, memo):
+  if n <= 1:
+    return n
+
+  ~ Check cache via has method
+  key = str(n)
+  if memo.has(key):
+    return memo[key]
+
+  result = fib_memo(n - 1, memo) + fib_memo(n - 2, memo)
+  return result
+
+~ Test without memo (small values to avoid slowness)
+through 0..10 as i:
+  print "fib({i}) = {fib_memo(i, {})}"

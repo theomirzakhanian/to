@@ -1,0 +1,10 @@
+~ Hello World in To
+print "Hello, World!"
+print "Welcome to the To programming language!"
+
+name = input("whats the password brah ")
+given name
+  if "theo":
+    print "yah"
+  else:
+    print "nah"

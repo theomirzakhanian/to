@@ -1,0 +1,18 @@
+~ Test: Stack traces on errors
+
+to inner():
+  x = [1, 2, 3]
+  return x[99]
+
+to middle():
+  return inner()
+
+to outer():
+  return middle()
+
+try:
+  outer()
+catch error:
+  print "Caught deep error: {error}"
+
+print "Stack trace test passed!"

@@ -1,0 +1,75 @@
+~ FFI — Call C libraries from To
+
+use ffi
+
+~ Load the C math library
+print "=== Math Library (libm) ==="
+libm = ffi.open("libm")
+
+~ double sqrt(double)
+result = libm.call("sqrt", [16.0], "double")
+print "sqrt(16) = {result}"
+
+~ double pow(double, double)
+result = libm.call("pow", [2.0, 10.0], "double")
+print "pow(2, 10) = {result}"
+
+~ double floor(double)
+result = libm.call("floor", [3.7], "double")
+print "floor(3.7) = {result}"
+
+~ double ceil(double)
+result = libm.call("ceil", [3.2], "double")
+print "ceil(3.2) = {result}"
+
+~ double log(double)
+result = libm.call("log", [2.718281828], "double")
+print "log(e) = {result}"
+
+~ double sin(double)
+result = libm.call("sin", [0.0], "double")
+print "sin(0) = {result}"
+
+~ double cos(double)
+result = libm.call("cos", [0.0], "double")
+print "cos(0) = {result}"
+
+~ Check if a symbol exists
+print "Has sqrt: {libm.has("sqrt")}"
+print "Has fake: {libm.has("fake_function")}"
+
+~ Load C standard library
+print ""
+print "=== C Standard Library ==="
+libc = ffi.open("libc")
+
+~ int strlen(const char*)
+result = libc.call("strlen", ["Hello, World!"], "int")
+print "strlen('Hello, World!') = {result}"
+
+~ int strcmp(const char*, const char*)
+result = libc.call("strcmp", ["abc", "abc"], "int")
+print "strcmp('abc', 'abc') = {result}"
+
+result = libc.call("strcmp", ["abc", "xyz"], "int")
+print "strcmp('abc', 'xyz') = {result}"
+
+~ int atoi(const char*)
+result = libc.call("atoi", ["42"], "int")
+print "atoi('42') = {result}"
+
+~ double atof(const char*)
+result = libc.call("atof", ["3.14159"], "double")
+print "atof('3.14159') = {result}"
+
+~ Sizes of C types
+print ""
+print "=== Type Sizes ==="
+print "sizeof(int) = {ffi.sizeof("int")}"
+print "sizeof(long) = {ffi.sizeof("long")}"
+print "sizeof(double) = {ffi.sizeof("double")}"
+print "sizeof(pointer) = {ffi.sizeof("pointer")}"
+print "sizeof(char) = {ffi.sizeof("char")}"
+
+print ""
+print "FFI tests passed!"

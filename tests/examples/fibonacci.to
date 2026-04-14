@@ -1,0 +1,9 @@
+~ Fibonacci in To
+
+to fib(n):
+  if n <= 1:
+    return n
+  return fib(n - 1) + fib(n - 2)
+
+through 0..15 as i:
+  print "fib({i}) = {fib(i)}"

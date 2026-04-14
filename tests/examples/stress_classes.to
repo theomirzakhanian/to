@@ -1,0 +1,174 @@
+~ Stress test: Complex class interactions
+
+build LinkedList:
+  to init():
+    my.items = []
+
+  to push(val):
+    my.items.add(val)
+
+  to pop():
+    if my.items.length == 0:
+      return none
+    return my.items.pop()
+
+  to peek():
+    if my.items.length == 0:
+      return none
+    return my.items[my.items.length - 1]
+
+  to size():
+    return my.items.length
+
+  to is_empty():
+    return my.items.length == 0
+
+  to show():
+    print my.items
+
+build Calculator:
+  to init():
+    my.history = []
+    my.result = 0
+
+  to add(x):
+    my.result = my.result + x
+    my.history.add("+ {x}")
+    return my
+
+  to sub(x):
+    my.result = my.result - x
+    my.history.add("- {x}")
+    return my
+
+  to mul(x):
+    my.result = my.result * x
+    my.history.add("* {x}")
+    return my
+
+  to get():
+    return my.result
+
+  to reset():
+    my.result = 0
+    my.history = []
+
+  to show_history():
+    print "History:"
+    through my.history as op:
+      print "  {op}"
+    print "  = {my.result}"
+
+build TodoList:
+  to init(name):
+    my.name = name
+    my.tasks = []
+
+  to add_task(task):
+    my.tasks.add({text = task, done = false})
+
+  to complete(index):
+    if index >= 0 and index < my.tasks.length:
+      my.tasks[index].done = true
+
+  to show():
+    print "{my.name}:"
+    i = 0
+    through my.tasks as task:
+      if task.done:
+        print "  [{i}] [x] {task.text}"
+      else:
+        print "  [{i}] [ ] {task.text}"
+      i = i + 1
+
+  to count_done():
+    count = 0
+    through my.tasks as task:
+      if task.done:
+        count = count + 1
+    return count
+
+  to count_pending():
+    return my.tasks.length - my.count_done()
+
+~ Test LinkedList as stack
+print "=== Stack ==="
+stack = LinkedList()
+stack.push(10)
+stack.push(20)
+stack.push(30)
+stack.show()
+print "Pop: {stack.pop()}"
+print "Pop: {stack.pop()}"
+print "Peek: {stack.peek()}"
+print "Size: {stack.size()}"
+
+~ Test Calculator
+print "=== Calculator ==="
+calc = Calculator()
+calc.add(10)
+calc.sub(3)
+calc.mul(4)
+print "Result: {calc.get()}"
+calc.show_history()
+
+~ Test chained returns (method returns my)
+calc2 = Calculator()
+~ Can't chain in one line yet, but test sequential
+calc2.add(5)
+calc2.add(10)
+calc2.mul(2)
+print "Chained result: {calc2.get()}"
+
+~ Test TodoList
+print "=== Todo ==="
+todo = TodoList("Shopping")
+todo.add_task("Buy milk")
+todo.add_task("Buy eggs")
+todo.add_task("Buy bread")
+todo.add_task("Buy cheese")
+todo.complete(0)
+todo.complete(2)
+todo.show()
+print "Done: {todo.count_done()}, Pending: {todo.count_pending()}"
+
+~ Multiple instances
+list1 = TodoList("Work")
+list2 = TodoList("Home")
+list1.add_task("Write report")
+list1.add_task("Send email")
+list2.add_task("Clean kitchen")
+list2.add_task("Walk dog")
+list1.complete(0)
+list2.complete(1)
+list1.show()
+list2.show()
+
+~ Class instances in a list
+print "=== Inventory ==="
+build Item:
+  to init(name, price, qty):
+    my.name = name
+    my.price = price
+    my.qty = qty
+
+  to total():
+    return my.price * my.qty
+
+  to show():
+    print "  {my.name}: ${my.price} x {my.qty} = ${my.total()}"
+
+inventory = [
+  Item("Widget", 9, 100),
+  Item("Gadget", 24, 50),
+  Item("Doohickey", 5, 200)
+]
+
+grand_total = 0
+through inventory as item:
+  item.show()
+  grand_total = grand_total + item.total()
+
+print "Grand total: ${grand_total}"
+
+print "All class tests passed!"

@@ -1,0 +1,30 @@
+~ Test: Fixed closure capture over loop variables
+
+to make_adders():
+  adders = []
+  through 0..5 as i:
+    adders.add((x): x + i)
+  return adders
+
+fns = make_adders()
+print "adders[0](10) = {fns[0](10)}"
+print "adders[1](10) = {fns[1](10)}"
+print "adders[2](10) = {fns[2](10)}"
+print "adders[3](10) = {fns[3](10)}"
+print "adders[4](10) = {fns[4](10)}"
+
+~ Independent counters
+to make_counter():
+  count = 0
+  to increment():
+    count = count + 1
+    return count
+  return increment
+
+a = make_counter()
+b = make_counter()
+print "a: {a()}, {a()}, {a()}"
+print "b: {b()}, {b()}"
+print "a: {a()}"
+
+print "Closure tests passed!"

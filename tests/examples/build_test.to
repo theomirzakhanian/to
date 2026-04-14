@@ -1,0 +1,23 @@
+~ Test for to build
+
+to square(x):
+  return x * x
+
+to greet(name):
+  print "Hello, {name}!"
+
+greet("World")
+
+n = 7
+result = square(n)
+print "Square of {n} is {result}"
+
+if result > 40:
+  print "That's a big number!"
+else:
+  print "That's a small number"
+
+x = 0
+while x < 5:
+  print x
+  x = x + 1

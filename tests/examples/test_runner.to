@@ -1,0 +1,57 @@
+~ Test file for `to test` command
+
+to add(x, y):
+  return x + y
+
+to multiply(x, y):
+  return x * y
+
+to is_palindrome(s):
+  reversed = ""
+  i = len(s) - 1
+  while i >= 0:
+    reversed = reversed + s[i]
+    i = i - 1
+  return s == reversed
+
+~ Test functions (must start with test_)
+
+to test_addition():
+  assert add(2, 3) == 5
+  assert add(-1, 1) == 0
+  assert add(0, 0) == 0
+  assert add(100, 200) == 300
+
+to test_multiplication():
+  assert multiply(3, 4) == 12
+  assert multiply(0, 100) == 0
+  assert multiply(-2, 5) == -10
+
+to test_palindrome():
+  assert is_palindrome("racecar")
+  assert is_palindrome("madam")
+  assert is_palindrome("a")
+  assert not is_palindrome("hello")
+
+to test_strings():
+  assert "hello".upper() == "HELLO"
+  assert "WORLD".lower() == "world"
+  assert "  hi  ".trim() == "hi"
+  assert len("test") == 4
+
+to test_lists():
+  nums = [1, 2, 3]
+  assert nums.length == 3
+  nums.add(4)
+  assert nums.length == 4
+  assert nums[3] == 4
+
+to test_destructuring():
+  [a, b, c] = [10, 20, 30]
+  assert a == 10
+  assert b == 20
+  assert c == 30
+
+  {name, age} = {name = "Theo", age = 18}
+  assert name == "Theo"
+  assert age == 18

@@ -1,0 +1,60 @@
+~ Test: Optional type hints
+
+~ Basic typed function
+to add(x: int, y: int) -> int:
+  return x + y
+
+print "add(3, 4) = {add(3, 4)}"
+
+~ String type
+to greet(name: string) -> string:
+  return "Hello, {name}!"
+
+print greet("Theo")
+
+~ Mixed — some typed, some not
+to describe(name: string, age):
+  print "{name} is {age}"
+
+describe("Alice", 25)
+
+~ Number type accepts both int and float
+to double(x: number) -> number:
+  return x * 2
+
+print "double(5) = {double(5)}"
+print "double(3.14) = {double(3.14)}"
+
+~ List and dict types
+to first(items: list):
+  return items[0]
+
+print "first([10,20,30]) = {first([10, 20, 30])}"
+
+to get_name(person: dict) -> string:
+  return person.name
+
+print "name = {get_name({name = "Bob", age = 30})}"
+
+~ No hints still works (backward compat)
+to old_style(x, y):
+  return x + y
+
+print "old_style: {old_style(1, 2)}"
+
+~ Test type error
+try:
+  add("hello", "world")
+catch error:
+  print "Caught: {error}"
+
+~ Test return type error
+to bad_return() -> int:
+  return "oops"
+
+try:
+  bad_return()
+catch error:
+  print "Caught: {error}"
+
+print "Type hint tests passed!"

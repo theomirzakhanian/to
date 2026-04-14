@@ -1,0 +1,158 @@
+~ Test all god-tier features
+
+~ ============================
+~ 1. Pipe operator (then)
+~ ============================
+
+to double(x):
+  return x * 2
+
+to add_ten(x):
+  return x + 10
+
+to square(x):
+  return x * x
+
+~ Simple pipe chain
+result = 5 then double then add_ten then square
+print "5 -> double -> add_ten -> square = {result}"
+
+~ Pipe with function that takes extra args
+to multiply(x, factor):
+  return x * factor
+
+result = 10 then multiply(3)
+print "10 then multiply(3) = {result}"
+
+~ Pipe with lambdas
+result = 7 then (x): x * x
+print "7 then square = {result}"
+
+~ Pipe with list operations
+to filter(list, func):
+  result = []
+  through list as item:
+    if func(item):
+      result.add(item)
+  return result
+
+to map(list, func):
+  result = []
+  through list as item:
+    result.add(func(item))
+  return result
+
+to sum(list):
+  total = 0
+  through list as item:
+    total = total + item
+  return total
+
+result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] then filter((x): x % 2 == 0) then map((x): x * x) then sum
+print "Even squares sum: {result}"
+
+~ ============================
+~ 2. Destructuring
+~ ============================
+
+~ List destructuring
+[a, b, c] = [10, 20, 30]
+print "a={a}, b={b}, c={c}"
+
+~ With rest
+[first, second, ...rest] = [1, 2, 3, 4, 5]
+print "first={first}, second={second}, rest={rest}"
+
+~ Dict destructuring
+{name, age, city} = {name = "Theo", age = 18, city = "LA"}
+print "name={name}, age={age}, city={city}"
+
+~ Function returning dict
+to get_user():
+  return {name = "Alice", age = 25, role = "admin"}
+
+{name, role} = get_user()
+print "User: {name}, role: {role}"
+
+~ ============================
+~ 3. Enums (options)
+~ ============================
+
+build Color as options:
+  Red
+  Green
+  Blue
+
+print "Color.Red = {Color.Red}"
+print "Color.Blue = {Color.Blue}"
+print "Has Red: {Color.has("Red")}"
+print "Has Purple: {Color.has("Purple")}"
+print "All colors: {Color.values()}"
+
+build Direction as options:
+  North
+  South
+  East
+  West
+
+facing = Direction.North
+given facing:
+  if "North":
+    print "Heading north!"
+  if "South":
+    print "Heading south!"
+
+~ ============================
+~ 4. Shapes (traits)
+~ ============================
+
+shape Describable:
+  to describe() -> string
+
+build Car fits Describable:
+  to init(make, model):
+    my.make = make
+    my.model = model
+
+  to describe() -> string:
+    return "{my.make} {my.model}"
+
+car = Car("Toyota", "Supra")
+print car.describe()
+
+shape Measurable:
+  to area() -> number
+  to perimeter() -> number
+
+build Rectangle fits Measurable:
+  to init(w, h):
+    my.w = w
+    my.h = h
+
+  to area() -> number:
+    return my.w * my.h
+
+  to perimeter() -> number:
+    return 2 * (my.w + my.h)
+
+rect = Rectangle(5, 3)
+print "Area: {rect.area()}, Perimeter: {rect.perimeter()}"
+
+~ ============================
+~ 5. Assert
+~ ============================
+
+assert 1 + 1 == 2
+assert "hello".length == 5
+assert [1, 2, 3].length == 3
+assert true
+assert not false
+
+to add(x: int, y: int) -> int:
+  return x + y
+
+assert add(2, 3) == 5
+assert add(0, 0) == 0
+
+print ""
+print "All god-tier features work!"

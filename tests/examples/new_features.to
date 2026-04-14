@@ -1,0 +1,117 @@
+~ Test all new v0.2.0 features
+
+~ 1. Single-quote strings
+print 'Hello from single quotes!'
+name = 'Theo'
+print "Mix: {name} says 'hi'"
+
+~ 2. Inheritance
+build Animal:
+  to init(name, sound):
+    my.name = name
+    my.sound = sound
+
+  to speak():
+    print "{my.name} says {my.sound}!"
+
+  to describe():
+    print "{my.name} is an animal"
+
+build Dog from Animal:
+  to init(name):
+    my.name = name
+    my.sound = "Woof"
+    my.tricks = []
+
+  to learn(trick):
+    my.tricks.add(trick)
+
+  to show_tricks():
+    print "{my.name} knows: {my.tricks}"
+
+build Cat from Animal:
+  to init(name):
+    my.name = name
+    my.sound = "Meow"
+
+rex = Dog("Rex")
+rex.speak()
+rex.describe()
+rex.learn("sit")
+rex.show_tricks()
+
+whiskers = Cat("Whiskers")
+whiskers.speak()
+whiskers.describe()
+
+~ 3. Lambdas
+double = (x): x * 2
+print "Lambda double(5) = {double(5)}"
+
+add = (a, b): a + b
+print "Lambda add(3, 4) = {add(3, 4)}"
+
+greet = (name): "Hey, " + name + "!"
+print greet("Theo")
+
+~ Lambdas with higher-order functions
+to map(list, func):
+  result = []
+  through list as item:
+    result.add(func(item))
+  return result
+
+to filter(list, func):
+  result = []
+  through list as item:
+    if func(item):
+      result.add(item)
+  return result
+
+numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+squared = map(numbers, (x): x * x)
+print "Squared: {squared}"
+
+evens = filter(numbers, (x): x % 2 == 0)
+print "Evens: {evens}"
+
+big = filter(numbers, (x): x > 5)
+print "Greater than 5: {big}"
+
+~ 4. Dict iteration
+person = {name = "Alice", age = 25, city = "NYC"}
+print "Keys:"
+through person as key:
+  print "  {key}"
+
+~ 5. String iteration
+print "Characters in 'hello':"
+through "hello" as ch:
+  print "  {ch}"
+
+~ 6. String slicing
+s = "Hello, World!"
+print "s[0..5] = {s[0..5]}"
+print "s[7..12] = {s[7..12]}"
+
+~ List slicing
+nums = [10, 20, 30, 40, 50]
+print "nums[1..4] = {nums[1..4]}"
+print "nums[0..2] = {nums[0..2]}"
+
+~ 7. given with colon (both work)
+day = "Friday"
+given day:
+  if "Monday":
+    print "Ugh"
+  if "Friday":
+    print "Yes! Friday!"
+  else:
+    print "Meh"
+
+~ Without colon still works
+given day
+  if "Friday":
+    print "Still Friday!"
+
+print "All new features work!"

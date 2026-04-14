@@ -1,0 +1,61 @@
+{
+  "name": "to-language",
+  "displayName": "To Language",
+  "description": "Language support for the To programming language — syntax highlighting, diagnostics, autocomplete, and more.",
+  "version": "0.2.0",
+  "publisher": "theo",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": [
+    "onLanguage:to"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "to",
+        "aliases": ["To", "to"],
+        "extensions": [".to"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/to-icon.png",
+          "dark": "./images/to-icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "to",
+        "scopeName": "source.to",
+        "path": "./syntaxes/to.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "To Language",
+      "properties": {
+        "to.executablePath": {
+          "type": "string",
+          "default": "to",
+          "description": "Path to the To executable"
+        },
+        "to.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable real-time error checking"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

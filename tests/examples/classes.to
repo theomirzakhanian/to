@@ -1,0 +1,40 @@
+~ Classes in To
+
+build Animal:
+  to init(name, sound):
+    my.name = name
+    my.sound = sound
+
+  to speak():
+    print "{my.name} says {my.sound}!"
+
+build Dog:
+  to init(name):
+    my.name = name
+    my.sound = "Woof"
+    my.tricks = []
+
+  to speak():
+    print "{my.name} says {my.sound}!"
+
+  to learn(trick):
+    my.tricks.add(trick)
+    print "{my.name} learned {trick}!"
+
+  to show_tricks():
+    if my.tricks.length == 0:
+      print "{my.name} doesn't know any tricks yet"
+    else:
+      print "{my.name} knows:"
+      through my.tricks as trick:
+        print "  - {trick}"
+
+rex = Dog("Rex")
+rex.speak()
+rex.learn("sit")
+rex.learn("shake")
+rex.learn("roll over")
+rex.show_tricks()
+
+cat = Animal("Whiskers", "Meow")
+cat.speak()

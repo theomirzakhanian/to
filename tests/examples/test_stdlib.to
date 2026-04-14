@@ -1,0 +1,70 @@
+~ Test: Standard library modules
+
+~ Time module
+use time
+
+print "=== Time ==="
+print "Date: {time.date()}"
+print "Clock: {time.clock()}"
+print "Year: {time.year()}"
+print "Timestamp: {time.now()}"
+
+start = time.ms()
+x = 0
+while x < 100000:
+  x = x + 1
+elapsed = time.ms() - start
+print "Loop took {elapsed}ms"
+
+~ Filesystem module
+use fs
+
+print ""
+print "=== Filesystem ==="
+print "CWD: {fs.cwd()}"
+print "CMakeLists.txt exists: {fs.exists("CMakeLists.txt")}"
+print "fake.txt exists: {fs.exists("fake.txt")}"
+
+~ Write, read, delete a temp file
+fs.write("/tmp/to_test_file.txt", "Hello from To!")
+content = fs.read("/tmp/to_test_file.txt")
+print "File content: {content}"
+print "File size: {fs.size("/tmp/to_test_file.txt")} bytes"
+print "Extension: {fs.ext("/tmp/to_test_file.txt")}"
+print "Basename: {fs.basename("/tmp/to_test_file.txt")}"
+print "Dirname: {fs.dirname("/tmp/to_test_file.txt")}"
+fs.remove("/tmp/to_test_file.txt")
+print "After delete: {fs.exists("/tmp/to_test_file.txt")}"
+
+~ List directory
+files = fs.list("tests/examples")
+print "Example files: {files.length} total"
+
+~ Regex module
+use regex
+
+print ""
+print "=== Regex ==="
+
+~ Test match
+result = regex.match("(\\d+)-(\\d+)", "Call 555-1234 now")
+print "Match: {result}"
+
+~ Test find_all
+emails = regex.find_all("[a-zA-Z]+@[a-zA-Z]+\\.[a-zA-Z]+", "Contact alice@test.com or bob@example.org")
+print "Emails: {emails}"
+
+~ Test replace
+cleaned = regex.replace("\\s+", " ", "too   many    spaces   here")
+print "Cleaned: {cleaned}"
+
+~ Test split
+parts = regex.split("[,;]", "one,two;three,four")
+print "Split: {parts}"
+
+~ Test test
+print "Has digits: {regex.test("\\d+", "abc123")}"
+print "Has digits: {regex.test("\\d+", "abcdef")}"
+
+print ""
+print "All stdlib tests passed!"

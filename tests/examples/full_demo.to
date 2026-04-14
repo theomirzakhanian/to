@@ -1,0 +1,114 @@
+~ To Programming Language — Full Demo
+
+~ Variables
+name = "Theo"
+age = 18
+const PI = 3.14159
+
+print "Name: {name}, Age: {age}"
+print "PI = {PI}"
+
+~ Functions
+to greet(person):
+  print "Hey, {person}!"
+
+to add(x, y):
+  return x + y
+
+greet(name)
+result = add(10, 20)
+print "10 + 20 = {result}"
+
+~ If / Or / Else
+if age >= 21:
+  print "Welcome in"
+or age >= 18:
+  print "Almost there"
+else:
+  print "Not yet"
+
+~ Given (pattern matching)
+day = "Friday"
+given day
+  if "Monday":
+    print "Pain"
+  if "Friday":
+    print "Freedom!"
+  else:
+    print "Just another day"
+
+~ Lists
+numbers = [1, 2, 3, 4, 5]
+print numbers
+numbers.add(6)
+print "After add: {numbers}"
+print "Length: {numbers.length}"
+print "First: {numbers[0]}"
+
+~ Dictionaries
+person = {name = "Alice", age = 25, city = "NYC"}
+print person.name
+print person.city
+person.age = 26
+print "Updated age: {person.age}"
+
+~ Through loops
+print "Counting:"
+through 1..6 as i:
+  print "  {i}"
+
+print "Names:"
+names = ["Alice", "Bob", "Charlie"]
+through names as n:
+  print "  Hello, {n}!"
+
+~ While loop
+x = 1
+while x <= 5:
+  print "x = {x}"
+  x = x + 1
+
+~ String methods
+message = "  Hello, World!  "
+print message.trim()
+print "HELLO".lower()
+print "hello".upper()
+
+words = "one,two,three".split(",")
+print words
+
+~ Error handling
+try:
+  x = 10 / 0
+catch error:
+  print "Caught: {error}"
+finally:
+  print "Done with error handling"
+
+~ Nested structures
+build Student:
+  to init(name, grade):
+    my.name = name
+    my.grade = grade
+
+  to status():
+    given my.grade
+      if "A":
+        print "{my.name} is excelling"
+      if "B":
+        print "{my.name} is doing great"
+      if "C":
+        print "{my.name} is passing"
+      else:
+        print "{my.name} needs help"
+
+students = [
+  Student("Alice", "A"),
+  Student("Bob", "C"),
+  Student("Charlie", "B")
+]
+
+through students as s:
+  s.status()
+
+print "All done!"
