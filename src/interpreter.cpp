@@ -537,7 +537,19 @@ void Interpreter::execImport(ASTNodePtr node, EnvPtr env) {
     std::string filepath;
     if (modulePath.size() > 3 && modulePath.substr(modulePath.size() - 3) == ".to") {
         filepath = modulePath;
-    } else {
+    } else if (std::filesystem::exists("to_modules/" + modulePath)) {
+        // Check to_modules: use to_modules/<name>/main.to or to_modules/<name>/<name>.to
+        std::string mainPath = "to_modules/" + modulePath + "/main.to";
+        std::string namedPath = "to_modules/" + modulePath + "/" + modulePath + ".to";
+        std::string indexPath = "to_modules/" + modulePath + "/index.to";
+        if (std::filesystem::exists(mainPath)) filepath = mainPath;
+        else if (std::filesystem::exists(namedPath)) filepath = namedPath;
+        else if (std::filesystem::exists(indexPath)) filepath = indexPath;
+    }
+    if (filepath.empty() && modulePath.size() > 3 && modulePath.substr(modulePath.size() - 3) == ".to") {
+        filepath = modulePath;
+    }
+    if (filepath.empty()) {
         // Try as a stdlib module
         std::filesystem::path basePath = std::filesystem::path(filename).parent_path();
         filepath = (basePath / (modulePath + ".to")).string();

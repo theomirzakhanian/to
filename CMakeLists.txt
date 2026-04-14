@@ -16,6 +16,7 @@ add_executable(to
     src/http.cpp
     src/ffi.cpp
     src/to_stdlib.cpp
+    src/pkg.cpp
 )
 
 target_include_directories(to PRIVATE src include)

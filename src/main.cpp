@@ -3,6 +3,7 @@
 #include "interpreter.h"
 #include "codegen.h"
 #include "error.h"
+#include "pkg.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -20,6 +21,11 @@ void printUsage() {
               << "  to check <file.to>            Check for errors without running\n"
               << "  to debug <file.to>            Run with debugger\n"
               << "  to test <file.to>             Run test functions\n"
+              << "  to init                       Create to.pkg in current directory\n"
+              << "  to get <user/repo>            Install a package from GitHub\n"
+              << "  to get <user/repo>@<version>  Install a specific version\n"
+              << "  to remove <name>              Uninstall a package\n"
+              << "  to list                       List installed packages\n"
               << "  to version                    Print version\n";
 }
 
@@ -317,6 +323,32 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         return cmdTest(argv[2]);
+    }
+
+    if (command == "get") {
+        if (argc < 3) {
+            std::cerr << "Error: Missing package spec\n";
+            std::cerr << "Usage: to get <user/repo>[@version]\n";
+            return 1;
+        }
+        return pkgGet(argv[2]);
+    }
+
+    if (command == "remove" || command == "uninstall") {
+        if (argc < 3) {
+            std::cerr << "Error: Missing package name\n";
+            std::cerr << "Usage: to remove <name>\n";
+            return 1;
+        }
+        return pkgRemove(argv[2]);
+    }
+
+    if (command == "list") {
+        return pkgList();
+    }
+
+    if (command == "init") {
+        return pkgInit();
     }
 
     std::cerr << "Unknown command: " << command << "\n";
