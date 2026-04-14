@@ -17,6 +17,7 @@ add_executable(to
     src/ffi.cpp
     src/to_stdlib.cpp
     src/pkg.cpp
+    src/formatter.cpp
 )
 
 target_include_directories(to PRIVATE src include)

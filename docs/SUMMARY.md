@@ -27,6 +27,7 @@ _Once you're comfortable with the basics, these features unlock the full power o
 * [Pattern Matching](advanced/pattern-matching.md)
 * [Optional Chaining](advanced/optional-chaining.md)
 * [Generators (yield)](advanced/generators.md)
+* [Multi-line Strings](advanced/heredoc.md)
 * [Async & Await](advanced/async.md)
 * [Enums & Sum Types](advanced/enums.md)
 * [Operator Overloading](advanced/operators.md)
@@ -37,6 +38,7 @@ _Once you're comfortable with the basics, these features unlock the full power o
 
 ## 📚 Standard Library
 
+* [process](stdlib/process.md)
 * [math](stdlib/math.md)
 * [time](stdlib/time.md)
 * [fs (filesystem)](stdlib/fs.md)
@@ -49,3 +51,4 @@ _Once you're comfortable with the basics, these features unlock the full power o
 
 * [VS Code Extension](tooling/vscode.md)
 * [Debugger](tooling/debugger.md)
+* [Formatter](tooling/formatter.md)

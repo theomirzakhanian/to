@@ -1,0 +1,33 @@
+~ Test: Multi-line strings (triple quotes)
+
+html = """
+  <html>
+    <body>
+      <h1>Hello!</h1>
+    </body>
+  </html>
+"""
+print html
+
+~ With interpolation
+name = "Theo"
+greeting = """
+  Dear {name},
+  Welcome to To!
+"""
+print greeting
+
+~ Single line heredoc
+text = """just one line"""
+print text
+
+~ SQL example
+table = "users"
+query = """
+  SELECT *
+  FROM {table}
+  WHERE active = true
+"""
+print query
+
+print "Heredoc tests passed!"

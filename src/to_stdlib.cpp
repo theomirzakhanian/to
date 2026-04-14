@@ -8,6 +8,8 @@
 #include <regex>
 #include <fstream>
 #include <thread>
+#include <unistd.h>
+#include <cstdio>
 
 namespace fs = std::filesystem;
 
@@ -404,4 +406,115 @@ void registerRegexModule(EnvPtr env) {
     )});
 
     env->define("regex", mod);
+}
+
+// ========================
+// Process Module
+// ========================
+
+void registerProcessModule(EnvPtr env) {
+    auto mod = ToValue::makeDict({});
+
+    // process.run(command) or process.run(command, args)
+    // Returns {stdout, stderr, exit_code}
+    mod->dictVal.push_back({"run", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("process.run() requires a string command");
+
+            std::string cmd = args[0]->strVal;
+            // If args list provided, append them
+            if (args.size() >= 2 && args[1]->type == ToValue::Type::LIST) {
+                for (auto& arg : args[1]->listVal) {
+                    cmd += " " + arg->toString();
+                }
+            }
+
+            // Redirect stderr to a temp file so we can capture both
+            std::string stderrFile = "/tmp/to_proc_stderr_" + std::to_string(time(nullptr));
+            std::string fullCmd = cmd + " 2>" + stderrFile;
+
+            FILE* pipe = popen(fullCmd.c_str(), "r");
+            if (!pipe) throw ToRuntimeError("Failed to run command: " + cmd);
+
+            char buffer[4096];
+            std::string stdoutStr;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                stdoutStr += buffer;
+            }
+            int exitCode = pclose(pipe);
+            exitCode = WEXITSTATUS(exitCode);
+
+            // Read stderr
+            std::string stderrStr;
+            std::ifstream errFile(stderrFile);
+            if (errFile.is_open()) {
+                std::string line;
+                while (std::getline(errFile, line)) {
+                    stderrStr += line + "\n";
+                }
+                errFile.close();
+            }
+            std::filesystem::remove(stderrFile);
+
+            // Trim trailing newline
+            if (!stdoutStr.empty() && stdoutStr.back() == '\n') stdoutStr.pop_back();
+            if (!stderrStr.empty() && stderrStr.back() == '\n') stderrStr.pop_back();
+
+            std::vector<std::pair<std::string, ToValuePtr>> result;
+            result.push_back({"stdout", ToValue::makeString(stdoutStr)});
+            result.push_back({"stderr", ToValue::makeString(stderrStr)});
+            result.push_back({"exit_code", ToValue::makeInt(exitCode)});
+            return ToValue::makeDict(std::move(result));
+        }
+    )});
+
+    // process.exec(command) — simple version, returns stdout only
+    mod->dictVal.push_back({"exec", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("process.exec() requires a string command");
+            std::string cmd = args[0]->strVal;
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) throw ToRuntimeError("Failed to run command: " + cmd);
+            char buffer[4096];
+            std::string result;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                result += buffer;
+            }
+            pclose(pipe);
+            if (!result.empty() && result.back() == '\n') result.pop_back();
+            return ToValue::makeString(result);
+        }
+    )});
+
+    // process.env(name) — get environment variable
+    mod->dictVal.push_back({"env", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("process.env() takes 1 string argument");
+            const char* val = getenv(args[0]->strVal.c_str());
+            if (!val) return ToValue::makeNone();
+            return ToValue::makeString(val);
+        }
+    )});
+
+    // process.exit(code)
+    mod->dictVal.push_back({"exit", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            int code = 0;
+            if (!args.empty() && args[0]->type == ToValue::Type::INT) code = (int)args[0]->intVal;
+            exit(code);
+            return ToValue::makeNone();
+        }
+    )});
+
+    // process.args — command line arguments (empty for now, would need main to set them)
+    mod->dictVal.push_back({"pid", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            return ToValue::makeInt(getpid());
+        }
+    )});
+
+    env->define("process", mod);
 }

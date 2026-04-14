@@ -1,0 +1,21 @@
+~ Test file for `to fmt` — this file has messy formatting
+~ Run: to fmt test_fmt.to
+
+x=5
+y  =   10
+result   =   x+y
+print   "Sum: {result}"
+
+to  greet  (name):
+  print "Hey, {name}!"
+
+greet("Theo")
+
+if x>3:
+  print "big"
+else:
+  print "small"
+
+numbers=[1,2,3,4,5]
+through numbers as n:
+  print n

@@ -136,6 +136,60 @@ Token Lexer::readString() {
     return Token(TokenType::STRING, result, startLine, startCol);
 }
 
+Token Lexer::readHeredoc() {
+    int startLine = line;
+    int startCol = column;
+    char quoteChar = current();
+    advance(); advance(); advance(); // skip the three quotes
+
+    std::string result;
+    while (!atEnd()) {
+        if (current() == quoteChar && peek() == quoteChar && peek(2) == quoteChar) {
+            advance(); advance(); advance(); // skip closing triple-quote
+            break;
+        }
+        result += current();
+        advance();
+    }
+
+    // Strip common leading whitespace (dedent)
+    std::istringstream stream(result);
+    std::string line_s;
+    std::vector<std::string> lines;
+    while (std::getline(stream, line_s)) {
+        lines.push_back(line_s);
+    }
+    // Remove first and last lines if they're blank
+    if (!lines.empty() && lines.front().find_first_not_of(" \t") == std::string::npos) {
+        lines.erase(lines.begin());
+    }
+    if (!lines.empty() && lines.back().find_first_not_of(" \t") == std::string::npos) {
+        lines.pop_back();
+    }
+    // Find minimum indentation
+    size_t minIndent = 999;
+    for (auto& l : lines) {
+        if (l.find_first_not_of(" \t") == std::string::npos) continue; // skip blank
+        size_t indent = l.find_first_not_of(" \t");
+        if (indent < minIndent) minIndent = indent;
+    }
+    if (minIndent == 999) minIndent = 0;
+    // Reconstruct with stripped indentation
+    result = "";
+    for (size_t i = 0; i < lines.size(); i++) {
+        if (i > 0) result += "\n";
+        if (lines[i].find_first_not_of(" \t") != std::string::npos && lines[i].size() > minIndent) {
+            result += lines[i].substr(minIndent);
+        } else if (lines[i].find_first_not_of(" \t") == std::string::npos) {
+            // blank line
+        } else {
+            result += lines[i];
+        }
+    }
+
+    return Token(TokenType::STRING, result, startLine, startCol);
+}
+
 Token Lexer::readNumber() {
     int startCol = column;
     std::string num;
@@ -280,6 +334,11 @@ std::vector<Token> Lexer::tokenize() {
 
         // Strings (double or single quotes)
         if (c == '"' || c == '\'') {
+            // Check for triple-quote heredoc: """ or '''
+            if (peek() == c && peek(2) == c) {
+                tokens.push_back(readHeredoc());
+                continue;
+            }
             tokens.push_back(readString());
             continue;
         }

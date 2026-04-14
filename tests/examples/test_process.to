@@ -1,0 +1,30 @@
+~ Test: Process module
+
+use process
+
+~ Run a command and get output
+result = process.run("echo", ["hello world"])
+print "stdout: {result.stdout}"
+print "exit: {result.exit_code}"
+
+~ Simple exec
+output = process.exec("echo 42")
+print "exec: {output}"
+
+~ Environment variable
+home = process.env("HOME")
+print "HOME: {home}"
+
+~ Missing env var
+missing = process.env("TO_LANG_NONEXISTENT_VAR_XYZ")
+print "Missing var: {missing}"
+
+~ PID
+pid = process.pid()
+print "PID: {pid}"
+
+~ Command with pipes
+count = process.exec("echo 'one two three' | wc -w")
+print "Word count: {count.trim()}"
+
+print "Process tests passed!"

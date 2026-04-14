@@ -87,6 +87,13 @@ public:
     explicit ReturnException(ToValuePtr v) : value(std::move(v)) {}
 };
 
+// Tail call signal for TCO
+class TailCallSignal : public std::exception {
+public:
+    std::vector<ToValuePtr> args;
+    explicit TailCallSignal(std::vector<ToValuePtr> a) : args(std::move(a)) {}
+};
+
 // Yield signal (raised inside a generator function body)
 class YieldSignal : public std::exception {
 public:

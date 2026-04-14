@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-brightgreen.svg)](#)
 [![Built with C++](https://img.shields.io/badge/built%20with-C%2B%2B17-orange.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-19%20passing-success.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-28%20passing-success.svg)](#)
 
 [**Documentation**](https://theo-10.gitbook.io/theo-docs) &nbsp;&middot;&nbsp; [**Install**](#-install) &nbsp;&middot;&nbsp; [**Examples**](#-examples) &nbsp;&middot;&nbsp; [**VS Code Extension**](#-editor-support)
 
@@ -544,6 +544,7 @@ $ to test math_test.to
 | **web** | `serve()`, `json()`, `parse_json()` — multi-threaded HTTP server |
 | **json** | `stringify()`, `parse()` |
 | **ffi** | `open()`, `sizeof()` — call any C library |
+| **process** | `run()`, `exec()`, `env()`, `exit()`, `pid()` — run shell commands |
 
 &nbsp;
 
@@ -558,6 +559,7 @@ to build <file.to>              Compile to native binary
 to build <file.to> -o app       Compile with custom name
 to check <file.to>              Check for errors
 to test <file.to>               Run test functions
+to fmt <file.to>                Format a .to file
 to debug <file.to>              Run with debugger
 to version                      Print version
 ```
@@ -613,6 +615,7 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 | Sum types | `build Result as options: Ok(val), Err(msg)` |
 | Operators | `to plus(other): ...` for `a + b` |
 | Decorators | `@cached to fib(n): ...` |
+| Heredoc | `"""multi-line string"""` |
 | Shapes | `shape X: ...` / `build Y fits X: ...` |
 | Type hints | `to f(x: int) -> string:` |
 | Assert | `assert x == 5` |

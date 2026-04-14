@@ -71,6 +71,7 @@ private:
     Token makeToken(TokenType type, const std::string& value);
 
     Token readString();
+    Token readHeredoc();
     Token readNumber();
     Token readIdentifier();
     void skipComment();

@@ -1,0 +1,31 @@
+~ Test: Tail call optimization
+~ Without TCO, this would blow the stack
+
+to count_down(n):
+  if n <= 0:
+    return "done"
+  return count_down(n - 1)
+
+~ This would crash without TCO — 100k deep recursion
+result = count_down(100000)
+print "count_down(100000) = {result}"
+
+~ Tail-recursive factorial
+to factorial(n, acc):
+  if n <= 1:
+    return acc
+  return factorial(n - 1, n * acc)
+
+print "10! = {factorial(10, 1)}"
+print "20! = {factorial(20, 1)}"
+
+~ Tail-recursive sum
+to sum_to(n, acc):
+  if n <= 0:
+    return acc
+  return sum_to(n - 1, acc + n)
+
+print "sum(1..1000) = {sum_to(1000, 0)}"
+print "sum(1..100000) = {sum_to(100000, 0)}"
+
+print "TCO tests passed!"

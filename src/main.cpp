@@ -4,6 +4,7 @@
 #include "codegen.h"
 #include "error.h"
 #include "pkg.h"
+#include "formatter.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -26,6 +27,7 @@ void printUsage() {
               << "  to get <user/repo>@<version>  Install a specific version\n"
               << "  to remove <name>              Uninstall a package\n"
               << "  to list                       List installed packages\n"
+              << "  to fmt <file.to>              Format a .to file\n"
               << "  to version                    Print version\n";
 }
 
@@ -349,6 +351,32 @@ int main(int argc, char* argv[]) {
 
     if (command == "init") {
         return pkgInit();
+    }
+
+    if (command == "fmt" || command == "format") {
+        if (argc < 3) {
+            std::cerr << "Error: Missing file argument\n";
+            std::cerr << "Usage: to fmt <file.to>\n";
+            return 1;
+        }
+        std::string filepath = argv[2];
+        std::string source = readFile(filepath);
+        try {
+            Lexer lexer(source, filepath);
+            auto tokens = lexer.tokenize();
+            Parser parser(tokens, filepath);
+            auto ast = parser.parse();
+            Formatter formatter;
+            std::string formatted = formatter.format(ast);
+            // Write back
+            std::ofstream out(filepath);
+            out << formatted;
+            std::cout << "Formatted " << filepath << "\n";
+            return 0;
+        } catch (ToError& e) {
+            std::cerr << e.format() << "\n";
+            return 1;
+        }
     }
 
     std::cerr << "Unknown command: " << command << "\n";

@@ -20,6 +20,10 @@ Interpreter::Interpreter(const std::string& filename)
 // Thread-local state: the generator currently producing values in this thread
 thread_local std::shared_ptr<ToGenerator> currentGenerator = nullptr;
 
+// Thread-local state: current function name for TCO
+thread_local std::string tcoCurrentFunc = "";
+thread_local bool tcoEnabled = false;
+
 // Forward decl
 static bool containsYield(const std::vector<ASTNodePtr>& stmts);
 
@@ -283,6 +287,18 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
             break;
         }
         case NodeType::ReturnStmt: {
+            // TCO: if returning a self-recursive call, throw TailCallSignal
+            if (tcoEnabled && node->value && node->value->type == NodeType::CallExpr) {
+                auto callNode = node->value;
+                if (callNode->callee->type == NodeType::Identifier &&
+                    callNode->callee->name == tcoCurrentFunc) {
+                    std::vector<ToValuePtr> newArgs;
+                    for (auto& arg : callNode->arguments) {
+                        newArgs.push_back(eval(arg, env));
+                    }
+                    throw TailCallSignal(std::move(newArgs));
+                }
+            }
             ToValuePtr val = node->value ? eval(node->value, env) : ToValue::makeNone();
             throw ReturnException(val);
         }
@@ -747,7 +763,7 @@ void Interpreter::execImport(ASTNodePtr node, EnvPtr env) {
         if (!std::filesystem::exists(filepath)) {
             // Try stdlib path
             // For now, just create an empty module for known stdlib modules
-            if (modulePath == "math" || modulePath == "io" || modulePath == "string" || modulePath == "web" || modulePath == "json" || modulePath == "ffi" || modulePath == "time" || modulePath == "fs" || modulePath == "regex") {
+            if (modulePath == "math" || modulePath == "io" || modulePath == "string" || modulePath == "web" || modulePath == "json" || modulePath == "ffi" || modulePath == "time" || modulePath == "fs" || modulePath == "regex" || modulePath == "process") {
                 // Register basic module builtins
                 if (modulePath == "io") {
                     auto ioModule = ToValue::makeDict({});
@@ -816,6 +832,8 @@ void Interpreter::execImport(ASTNodePtr node, EnvPtr env) {
                     registerFSModule(env);
                 } else if (modulePath == "regex") {
                     registerRegexModule(env);
+                } else if (modulePath == "process") {
+                    registerProcessModule(env);
                 }
                 if (!node->importNames.empty()) {
                     auto mod = env->get(modulePath);
@@ -1284,16 +1302,36 @@ ToValuePtr Interpreter::callFunction(ToValuePtr callee, const std::vector<ToValu
             }
         }
         pushFrame(func->name, filename, line);
-        auto funcEnv = func->closure->createChild();
-        for (size_t i = 0; i < func->params.size(); i++) {
-            funcEnv->define(func->params[i], args[i]);
-        }
-        try {
-            for (auto& stmt : func->body) {
-                execStatement(stmt, funcEnv);
+
+        // Enable TCO for this function
+        std::string savedTcoFunc = tcoCurrentFunc;
+        bool savedTcoEnabled = tcoEnabled;
+        tcoCurrentFunc = func->name;
+        tcoEnabled = true;
+
+        auto currentArgs = args;
+        while (true) {
+            auto funcEnv = func->closure->createChild();
+            for (size_t i = 0; i < func->params.size(); i++) {
+                funcEnv->define(func->params[i], currentArgs[i]);
             }
-        } catch (ReturnException& e) {
-            popFrame();
+            try {
+                for (auto& stmt : func->body) {
+                    execStatement(stmt, funcEnv);
+                }
+                // No return — fall through
+                tcoCurrentFunc = savedTcoFunc;
+                tcoEnabled = savedTcoEnabled;
+                popFrame();
+                return ToValue::makeNone();
+            } catch (TailCallSignal& tc) {
+                // TCO: loop with new arguments instead of recursing
+                currentArgs = std::move(tc.args);
+                continue;
+            } catch (ReturnException& e) {
+                tcoCurrentFunc = savedTcoFunc;
+                tcoEnabled = savedTcoEnabled;
+                popFrame();
             // Type-check return value if hint is present
 
             if (!func->returnTypeHint.empty()) {
@@ -1319,11 +1357,12 @@ ToValuePtr Interpreter::callFunction(ToValuePtr callee, const std::vector<ToValu
             if (e.stackTrace.empty()) {
                 e.stackTrace = formatStackTrace();
             }
+            tcoCurrentFunc = savedTcoFunc;
+            tcoEnabled = savedTcoEnabled;
             popFrame();
             throw;
         }
-        popFrame();
-        return ToValue::makeNone();
+        } // end while(true) TCO loop
     }
 
     if (callee->type == ToValue::Type::CLASS) {
