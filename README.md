@@ -468,10 +468,33 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 
 ---
 
+## 🙏 Acknowledgements
+
+**Theo Mirzakhanian** — Language designer and lead engineer
+- Designed the To syntax and semantics from the ground up
+- Authored the core lexer, parser, and AST
+- Implemented the tree-walking interpreter, class system, and async runtime
+- Designed the pipe operator, shapes, enums, and type hint system
+- Built the VS Code extension grammar and feature set
+- Designed the package manager and module resolution
+
+**[Claude Code](https://claude.com/claude-code)** — Development collaborator
+- Assisted with implementation of the C codegen backend
+- Helped debug parser edge cases (closure loop capture, string interpolation, bracket nesting)
+- Contributed to the HTTP server, FFI, and standard library modules
+- Helped organize the repository, write documentation, and push to GitHub
+- Helped clean up memory management and thread safety in the interpreter
+
+Built in C++17 with zero external dependencies. The full commit history is available [here](https://github.com/theomirzakhanian/to/commits/main).
+
+&nbsp;
+
+---
+
 <div align="center">
 
 **[Read the full documentation](https://theo-10.gitbook.io/theo-docs)**
 
-Built by Theo.
+Made by Theo Mirzakhanian.
 
 </div>
