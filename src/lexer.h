@@ -18,6 +18,7 @@ enum class TokenType {
     DOT_DOT_DOT, // ...
     YIELD,
     QUESTION_DOT, // ?.
+    AT, // @
 
     // Operators
     PLUS, MINUS, STAR, SLASH, MODULO,

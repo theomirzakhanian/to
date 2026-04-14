@@ -150,12 +150,37 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
         case NodeType::TryCatchFinally: execTryCatch(node, env); break;
         case NodeType::ImportStmt: execImport(node, env); break;
         case NodeType::EnumDef: {
-            // Create a dict-like object with enum values
             auto enumObj = ToValue::makeDict({});
             for (size_t i = 0; i < node->enumValues.size(); i++) {
-                enumObj->dictVal.push_back({node->enumValues[i], ToValue::makeString(node->enumValues[i])});
+                const std::string& tag = node->enumValues[i];
+                const std::vector<std::string>& fields = node->enumFields[i];
+
+                if (fields.empty()) {
+                    // Plain value: Color.Red == "Red"
+                    enumObj->dictVal.push_back({tag, ToValue::makeString(tag)});
+                } else {
+                    // Constructor: Ok(value) returns a tagged dict
+                    // Capture by value for thread safety
+                    auto capturedTag = tag;
+                    auto capturedFields = fields;
+                    enumObj->dictVal.push_back({tag, ToValue::makeBuiltin(
+                        [capturedTag, capturedFields](std::vector<ToValuePtr> args) -> ToValuePtr {
+                            if (args.size() != capturedFields.size()) {
+                                throw ToRuntimeError(capturedTag + " expects " +
+                                    std::to_string(capturedFields.size()) + " arguments, got " +
+                                    std::to_string(args.size()));
+                            }
+                            std::vector<std::pair<std::string, ToValuePtr>> entries;
+                            entries.push_back({"__tag__", ToValue::makeString(capturedTag)});
+                            for (size_t j = 0; j < capturedFields.size(); j++) {
+                                entries.push_back({capturedFields[j], args[j]});
+                            }
+                            return ToValue::makeDict(std::move(entries));
+                        }
+                    )});
+                }
             }
-            // Add values() method
+            // values() / has()
             auto values = std::make_shared<std::vector<std::string>>(node->enumValues);
             enumObj->dictVal.push_back({"values", ToValue::makeBuiltin(
                 [values](std::vector<ToValuePtr> args) -> ToValuePtr {
@@ -164,7 +189,6 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
                     return ToValue::makeList(std::move(list));
                 }
             )});
-            // Add has() method
             enumObj->dictVal.push_back({"has", ToValue::makeBuiltin(
                 [values](std::vector<ToValuePtr> args) -> ToValuePtr {
                     if (args.empty() || args[0]->type != ToValue::Type::STRING)
@@ -366,6 +390,17 @@ void Interpreter::execAssignment(ASTNodePtr node, EnvPtr env) {
             if (i < 0 || i >= (int64_t)obj->listVal.size())
                 throw ToRuntimeError("Index out of bounds", target->line);
             obj->listVal[i] = val;
+        } else if (obj->type == ToValue::Type::DICT) {
+            if (idx->type != ToValue::Type::STRING)
+                throw ToRuntimeError("Dict key must be a string", target->line);
+            // Update existing key or add new
+            for (auto& pair : obj->dictVal) {
+                if (pair.first == idx->strVal) {
+                    pair.second = val;
+                    return;
+                }
+            }
+            obj->dictVal.push_back({idx->strVal, val});
         } else {
             throw ToRuntimeError("Cannot index " + obj->typeName(), target->line);
         }
@@ -471,6 +506,33 @@ void Interpreter::execGiven(ASTNodePtr node, EnvPtr env) {
             return;
         }
 
+        // Sum type pattern: Tag(a, b)
+        if (branch.patternKind == 3) {
+            if (val->type != ToValue::Type::DICT) continue;
+            // Find __tag__ field
+            std::string valTag;
+            for (auto& p : val->dictVal) {
+                if (p.first == "__tag__" && p.second->type == ToValue::Type::STRING) {
+                    valTag = p.second->strVal;
+                    break;
+                }
+            }
+            if (valTag != branch.patternTag) continue;
+
+            // Bind fields in order
+            auto branchEnv = env->createChild();
+            size_t bindIdx = 0;
+            for (auto& p : val->dictVal) {
+                if (p.first == "__tag__") continue;
+                if (bindIdx < branch.patternBindings.size()) {
+                    branchEnv->define(branch.patternBindings[bindIdx], p.second);
+                    bindIdx++;
+                }
+            }
+            for (auto& stmt : branch.body) execStatement(stmt, branchEnv);
+            return;
+        }
+
         // Standard value match
         auto branchVal = eval(branch.condition, env);
         bool match = false;
@@ -569,7 +631,19 @@ void Interpreter::execFunctionDef(ASTNodePtr node, EnvPtr env) {
     func->body = node->body;
     func->closure = env;
     func->isGenerator = containsYield(node->body);
-    env->define(node->name, ToValue::makeFunction(func));
+    ToValuePtr funcVal = ToValue::makeFunction(func);
+
+    // Apply decorators (innermost first, which is the last in the list)
+    // @a @b to foo — parsed order [a, b], applied as a(b(foo))
+    for (auto it = node->decorators.rbegin(); it != node->decorators.rend(); ++it) {
+        auto decorator = env->get(*it);
+        if (!decorator) {
+            throw ToRuntimeError("Decorator '" + *it + "' not found", node->line);
+        }
+        funcVal = callFunction(decorator, {funcVal}, node->line);
+    }
+
+    env->define(node->name, funcVal);
 }
 
 void Interpreter::execClassDef(ASTNodePtr node, EnvPtr env) {
@@ -939,6 +1013,48 @@ ToValuePtr Interpreter::evalBinaryExpr(ASTNodePtr node, EnvPtr env) {
     }
 
     auto right = eval(node->right, env);
+
+    // Operator overloading: if left is an instance and has a matching method, call it
+    if (left->type == ToValue::Type::INSTANCE) {
+        std::string methodName;
+        bool invertResult = false;
+        if (node->op == "+") methodName = "plus";
+        else if (node->op == "-") methodName = "minus";
+        else if (node->op == "*") methodName = "times";
+        else if (node->op == "/") methodName = "divide";
+        else if (node->op == "%") methodName = "mod";
+        else if (node->op == "==") methodName = "equals";
+        else if (node->op == "!=") { methodName = "equals"; invertResult = true; }
+        else if (node->op == "<") methodName = "less_than";
+        else if (node->op == "<=") methodName = "less_equal";
+        else if (node->op == ">") methodName = "greater_than";
+        else if (node->op == ">=") methodName = "greater_equal";
+
+        if (!methodName.empty()) {
+            auto& inst = left->instanceVal;
+            // Check if class has this method
+            for (auto& m : inst->klass->methods) {
+                if (m.name == methodName) {
+                    // Build a call expression
+                    auto callNode = std::make_shared<ASTNode>();
+                    callNode->type = NodeType::CallExpr;
+                    callNode->line = node->line;
+                    auto memberAccess = std::make_shared<ASTNode>();
+                    memberAccess->type = NodeType::MemberAccess;
+                    memberAccess->object = node->left;
+                    memberAccess->member = methodName;
+                    memberAccess->line = node->line;
+                    callNode->callee = memberAccess;
+                    callNode->arguments.push_back(node->right);
+                    auto result = eval(callNode, env);
+                    if (invertResult && result->type == ToValue::Type::BOOL) {
+                        return ToValue::makeBool(!result->boolVal);
+                    }
+                    return result;
+                }
+            }
+        }
+    }
 
     // String concatenation
     if (node->op == "+" && (left->type == ToValue::Type::STRING || right->type == ToValue::Type::STRING)) {

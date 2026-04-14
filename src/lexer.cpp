@@ -362,6 +362,10 @@ std::vector<Token> Lexer::tokenize() {
                 if (!atEnd() && current() == '.') { advance(); tokens.push_back(Token(TokenType::QUESTION_DOT, "?.", line, startCol)); }
                 else { throw ToError(filename, line, startCol, std::string("Unexpected character '?'"), "Use '?.' for optional chaining."); }
                 break;
+            case '@':
+                advance();
+                tokens.push_back(Token(TokenType::AT, "@", line, startCol));
+                break;
             case ',':
                 advance();
                 tokens.push_back(Token(TokenType::COMMA, ",", line, startCol));
@@ -453,6 +457,7 @@ std::string tokenTypeName(TokenType type) {
         case TokenType::DOT_DOT_DOT: return "DOT_DOT_DOT";
         case TokenType::YIELD: return "YIELD";
         case TokenType::QUESTION_DOT: return "QUESTION_DOT";
+        case TokenType::AT: return "AT";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
         case TokenType::STAR: return "STAR";

@@ -1,0 +1,67 @@
+~ Test: Decorators
+
+~ A simple logging decorator
+to logged(fn):
+  to wrapped(x):
+    print "Calling with {x}"
+    result = fn(x)
+    print "Got result: {result}"
+    return result
+  return wrapped
+
+~ A memoization decorator
+to cached(fn):
+  store = {}
+  to wrapped(x):
+    key = str(x)
+    if store.has(key):
+      print "  (cache hit for {x})"
+      return store[key]
+    result = fn(x)
+    store[key] = result
+    return result
+  return wrapped
+
+~ Timing decorator
+use time
+to timed(fn):
+  to wrapped(x):
+    start = time.ms()
+    result = fn(x)
+    elapsed = time.ms() - start
+    print "  (took {elapsed}ms)"
+    return result
+  return wrapped
+
+~ Use a single decorator
+@logged
+to double(x):
+  return x * 2
+
+print double(5)
+print double(10)
+
+~ Stack multiple decorators (innermost first)
+@logged
+@cached
+to expensive(x):
+  i = 0
+  while i < 100000:
+    i = i + 1
+  return x * x
+
+print expensive(7)
+print expensive(7)   ~ cache hit
+print expensive(8)
+
+~ Timing with caching
+@timed
+@cached
+to slow_fib(n):
+  if n <= 1:
+    return n
+  return slow_fib(n - 1) + slow_fib(n - 2)
+
+print slow_fib(20)
+
+print "Decorator tests passed!"

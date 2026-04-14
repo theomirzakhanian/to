@@ -81,6 +81,23 @@ ASTNodePtr Parser::parseStatement() {
         case TokenType::WHILE: return parseWhile();
         case TokenType::THROUGH: return parseThrough();
         case TokenType::TO: return parseFunctionDef();
+        case TokenType::AT: {
+            // Collect decorators: @name [newline] @name [newline] ... to funcname
+            std::vector<std::string> decorators;
+            while (check(TokenType::AT)) {
+                advance(); // skip @
+                Token name = expect(TokenType::IDENTIFIER, "Expected decorator name after '@'");
+                decorators.push_back(name.value);
+                skipNewlines();
+            }
+            if (!check(TokenType::TO)) {
+                throw ToError(filename, current().line, current().column,
+                    "Decorator must be followed by a function definition");
+            }
+            auto funcNode = parseFunctionDef();
+            funcNode->decorators = decorators;
+            return funcNode;
+        }
         case TokenType::BUILD: return parseClassDef();
         case TokenType::TRY: return parseTryCatch();
         case TokenType::USE: return parseImport();
@@ -345,6 +362,54 @@ ASTNodePtr Parser::parseGiven() {
                 } else {
                     branch.condition = parseExpression();
                 }
+            } else if (check(TokenType::IDENTIFIER)) {
+                // Look for sum type pattern: TagName(a, b):
+                size_t saved = pos;
+                Token ident = advance(); // consume identifier
+                if (check(TokenType::LPAREN)) {
+                    size_t parenSaved = pos;
+                    advance(); // skip (
+                    bool isPattern = false;
+                    if (check(TokenType::RPAREN) || check(TokenType::IDENTIFIER)) {
+                        size_t probe = pos;
+                        // Check that contents are identifiers separated by commas
+                        bool valid = true;
+                        if (tokens[probe].type == TokenType::IDENTIFIER) {
+                            probe++;
+                            while (probe < tokens.size() && tokens[probe].type == TokenType::COMMA) {
+                                probe++;
+                                if (probe < tokens.size() && tokens[probe].type == TokenType::IDENTIFIER) probe++;
+                                else { valid = false; break; }
+                            }
+                        }
+                        if (valid && probe < tokens.size() && tokens[probe].type == TokenType::RPAREN) {
+                            probe++;
+                            if (probe < tokens.size() && tokens[probe].type == TokenType::COLON) {
+                                isPattern = true;
+                            }
+                        }
+                    }
+                    if (isPattern) {
+                        // Parse sum type pattern
+                        branch.patternKind = 3;
+                        branch.patternTag = ident.value;
+                        if (!check(TokenType::RPAREN)) {
+                            Token f = expect(TokenType::IDENTIFIER, "Expected binding name");
+                            branch.patternBindings.push_back(f.value);
+                            while (match(TokenType::COMMA)) {
+                                f = expect(TokenType::IDENTIFIER, "Expected binding name");
+                                branch.patternBindings.push_back(f.value);
+                            }
+                        }
+                        expect(TokenType::RPAREN, "Expected ')'");
+                    } else {
+                        pos = saved;
+                        branch.condition = parseExpression();
+                    }
+                } else {
+                    pos = saved;
+                    branch.condition = parseExpression();
+                }
             } else {
                 branch.condition = parseExpression();
             }
@@ -464,6 +529,20 @@ ASTNodePtr Parser::parseClassDef() {
             if (check(TokenType::DEDENT)) break;
             Token val = expect(TokenType::IDENTIFIER, "Expected enum value name");
             node->enumValues.push_back(val.value);
+            // Optional fields: Ok(value), Err(message, code)
+            std::vector<std::string> fields;
+            if (match(TokenType::LPAREN)) {
+                if (!check(TokenType::RPAREN)) {
+                    Token f = expect(TokenType::IDENTIFIER, "Expected field name");
+                    fields.push_back(f.value);
+                    while (match(TokenType::COMMA)) {
+                        f = expect(TokenType::IDENTIFIER, "Expected field name");
+                        fields.push_back(f.value);
+                    }
+                }
+                expect(TokenType::RPAREN, "Expected ')'");
+            }
+            node->enumFields.push_back(fields);
             expectNewlineOrEnd();
             skipNewlines();
         }

@@ -341,6 +341,83 @@ result2 = await task2
 </details>
 
 <details>
+<summary><b>Operator Overloading</b></summary>
+
+&nbsp;
+
+Define what `+`, `==`, `<` mean for your classes:
+
+```
+build Vector:
+  to init(x, y):
+    my.x = x
+    my.y = y
+  to plus(other):
+    return Vector(my.x + other.x, my.y + other.y)
+  to equals(other):
+    return my.x == other.x and my.y == other.y
+
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+v1 + v2       ~ Vector(4, 6)
+v1 == Vector(1, 2)   ~ true
+```
+
+</details>
+
+<details>
+<summary><b>Decorators</b></summary>
+
+&nbsp;
+
+Wrap functions cleanly — no boilerplate:
+
+```
+to cached(fn):
+  store = {}
+  to wrapped(x):
+    key = str(x)
+    if store.has(key): return store[key]
+    result = fn(x)
+    store[key] = result
+    return result
+  return wrapped
+
+@cached
+to fib(n):
+  if n <= 1: return n
+  return fib(n - 1) + fib(n - 2)
+```
+
+</details>
+
+<details>
+<summary><b>Sum Types</b></summary>
+
+&nbsp;
+
+Enums that carry data — safer than exceptions:
+
+```
+build Result as options:
+  Ok(value)
+  Err(message)
+
+to divide(a, b):
+  if b == 0:
+    return Result.Err("no divide by zero")
+  return Result.Ok(a / b)
+
+given divide(10, 2):
+  if Ok(v):
+    print "Got {v}"
+  if Err(msg):
+    print "Failed: {msg}"
+```
+
+</details>
+
+<details>
 <summary><b>Enums & Shapes</b></summary>
 
 &nbsp;
@@ -533,6 +610,9 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 | Generators | `to gen(): yield 1; yield 2` |
 | Async | `task = async work()` / `await task` |
 | Enums | `build Color as options: Red, Green, Blue` |
+| Sum types | `build Result as options: Ok(val), Err(msg)` |
+| Operators | `to plus(other): ...` for `a + b` |
+| Decorators | `@cached to fib(n): ...` |
 | Shapes | `shape X: ...` / `build Y fits X: ...` |
 | Type hints | `to f(x: int) -> string:` |
 | Assert | `assert x == 5` |
@@ -553,7 +633,7 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 - Designed the To syntax and semantics from the ground up
 - Authored the core lexer, parser, and AST
 - Implemented the tree-walking interpreter, class system, and async runtime
-- Designed the pipe operator, shapes, enums, pattern matching, generators, and type hint system
+- Designed the pipe operator, shapes, enums, sum types, pattern matching, generators, decorators, operator overloading, and type hint system
 - Built the VS Code extension grammar and feature set
 - Designed the package manager and module resolution
 

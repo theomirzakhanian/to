@@ -45,7 +45,9 @@ struct GivenBranch {
     // patternKind 0 = no pattern (standard value match)
     // patternKind 1 = dict pattern {key: value, bind}
     // patternKind 2 = list pattern [a, b, ...rest]
+    // patternKind 3 = sum type pattern Tag(a, b)
     int patternKind = 0;
+    std::string patternTag; // for pattern kind 3
     std::vector<std::string> patternBindings; // names to bind on match
     std::vector<std::string> patternKeys;      // dict keys (for dict patterns)
     std::vector<ASTNodePtr> patternValues;      // literal values for dict keys (null = bind only)
@@ -143,6 +145,7 @@ struct ASTNode {
     std::vector<std::string> params;
     std::vector<std::string> paramTypes; // optional type hints (empty string = no hint)
     std::string returnTypeHint; // optional return type hint
+    std::vector<std::string> decorators; // @name stack, outermost last
 
     // For class definition
     std::string parentClass; // inheritance: build Dog from Animal
@@ -161,8 +164,9 @@ struct ASTNode {
     std::vector<std::string> destructNames; // variable names to bind
     std::string restName; // ...rest variable name (empty if none)
 
-    // For enum (options)
+    // For enum (options) — each value can have optional field names
     std::vector<std::string> enumValues;
+    std::vector<std::vector<std::string>> enumFields; // fields per value, empty if plain
 
     // For shape
     std::vector<std::pair<std::string, std::vector<std::string>>> shapeMethodSigs; // name -> param types

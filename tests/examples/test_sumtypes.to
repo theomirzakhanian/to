@@ -1,0 +1,75 @@
+~ Test: Sum types with data
+
+~ Classic Result type
+build Result as options:
+  Ok(value)
+  Err(message)
+
+to divide(a, b):
+  if b == 0:
+    return Result.Err("Division by zero")
+  return Result.Ok(a / b)
+
+~ Pattern match on the result
+r1 = divide(10, 2)
+given r1:
+  if Ok(v):
+    print "10 / 2 = {v}"
+  if Err(msg):
+    print "Failed: {msg}"
+
+r2 = divide(10, 0)
+given r2:
+  if Ok(v):
+    print "10 / 0 = {v}"
+  if Err(msg):
+    print "Failed: {msg}"
+
+~ Option type (maybe/optional)
+build Option as options:
+  Some(value)
+  None
+
+to find_user(id):
+  if id == 1:
+    return Option.Some("Theo")
+  return Option.None
+
+u = find_user(1)
+given u:
+  if Some(name):
+    print "Found user: {name}"
+  if "None":
+    print "No user found"
+
+u2 = find_user(99)
+given u2:
+  if Some(name):
+    print "Found user: {name}"
+  else:
+    print "No user found"
+
+~ Events — multiple constructors with different arities
+build Event as options:
+  Click(x, y)
+  KeyPress(key)
+  Scroll(delta)
+  Close
+
+to handle(event):
+  given event:
+    if Click(x, y):
+      print "Click at ({x}, {y})"
+    if KeyPress(key):
+      print "Key pressed: {key}"
+    if Scroll(delta):
+      print "Scrolled by {delta}"
+    else:
+      print "Other event"
+
+handle(Event.Click(100, 200))
+handle(Event.KeyPress("Enter"))
+handle(Event.Scroll(-5))
+handle(Event.Close)
+
+print "Sum type tests passed!"
