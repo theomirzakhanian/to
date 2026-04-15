@@ -134,14 +134,21 @@ jobs:
           name: to-wasm
           path: artifacts/wasm/
 
+      - name: Flatten WASM files
+        run: |
+          find artifacts/ -name "*.wasm" -o -name "to.js" | head -5
+          cp $(find artifacts/ -name "to.js" | head -1) artifacts/to.js || true
+          cp $(find artifacts/ -name "*.wasm" | head -1) artifacts/to.wasm || true
+          ls -la artifacts/
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/to-macos
             artifacts/to-linux
-            artifacts/wasm/build-wasm/to.js
-            artifacts/wasm/build-wasm/to.wasm
+            artifacts/to.js
+            artifacts/to.wasm
           body: |
             ## To ${{ github.ref_name }}
 
