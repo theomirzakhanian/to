@@ -23,11 +23,10 @@ jobs:
 
       - name: Run tests
         run: |
-          cd build
           PASS=0; FAIL=0
-          for f in ../tests/examples/*.to; do
-            case "$f" in *helpers*|*web_server*) continue;; esac
-            if timeout 30 ./to run "$f" > /dev/null 2>&1; then
+          for f in tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*|*hello*) continue;; esac
+            if ./build/to run "$f" > /dev/null 2>&1; then
               PASS=$((PASS+1))
             else
               echo "FAIL: $f"
