@@ -763,7 +763,7 @@ void Interpreter::execImport(ASTNodePtr node, EnvPtr env) {
         if (!std::filesystem::exists(filepath)) {
             // Try stdlib path
             // For now, just create an empty module for known stdlib modules
-            if (modulePath == "math" || modulePath == "io" || modulePath == "string" || modulePath == "web" || modulePath == "json" || modulePath == "ffi" || modulePath == "time" || modulePath == "fs" || modulePath == "regex" || modulePath == "process") {
+            if (modulePath == "math" || modulePath == "io" || modulePath == "string" || modulePath == "web" || modulePath == "json" || modulePath == "ffi" || modulePath == "time" || modulePath == "fs" || modulePath == "regex" || modulePath == "process" || modulePath == "net") {
                 // Register basic module builtins
                 if (modulePath == "io") {
                     auto ioModule = ToValue::makeDict({});
@@ -832,6 +832,8 @@ void Interpreter::execImport(ASTNodePtr node, EnvPtr env) {
                     registerFSModule(env);
                 } else if (modulePath == "regex") {
                     registerRegexModule(env);
+                } else if (modulePath == "net") {
+                    registerNetModule(env);
                 } else if (modulePath == "process") {
                     registerProcessModule(env);
                 }

@@ -518,3 +518,306 @@ void registerProcessModule(EnvPtr env) {
 
     env->define("process", mod);
 }
+
+// ========================
+// Net Module (TCP/UDP sockets)
+// ========================
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+// Helper: create a connection object (dict with fd-bound methods)
+static ToValuePtr makeConnectionObject(int fd, const std::string& remoteAddr, int remotePort) {
+    auto connFd = std::make_shared<int>(fd);
+    auto conn = ToValue::makeDict({});
+
+    conn->dictVal.push_back({"address", ToValue::makeString(remoteAddr)});
+    conn->dictVal.push_back({"port", ToValue::makeInt(remotePort)});
+
+    // conn.read(max_bytes?) — read data from connection
+    conn->dictVal.push_back({"read", ToValue::makeBuiltin(
+        [connFd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            int maxBytes = 4096;
+            if (!args.empty() && args[0]->type == ToValue::Type::INT) maxBytes = (int)args[0]->intVal;
+            std::vector<char> buf(maxBytes);
+            ssize_t n = recv(*connFd, buf.data(), maxBytes, 0);
+            if (n <= 0) return ToValue::makeString("");
+            return ToValue::makeString(std::string(buf.data(), n));
+        }
+    )});
+
+    // conn.read_line() — read until newline
+    conn->dictVal.push_back({"read_line", ToValue::makeBuiltin(
+        [connFd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            std::string line;
+            char c;
+            while (recv(*connFd, &c, 1, 0) == 1) {
+                if (c == '\n') break;
+                if (c != '\r') line += c;
+            }
+            return ToValue::makeString(line);
+        }
+    )});
+
+    // conn.write(data) — send data
+    conn->dictVal.push_back({"write", ToValue::makeBuiltin(
+        [connFd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("conn.write() takes 1 argument");
+            std::string data = args[0]->toString();
+            ssize_t sent = send(*connFd, data.c_str(), data.size(), 0);
+            return ToValue::makeInt(sent);
+        }
+    )});
+
+    // conn.close()
+    conn->dictVal.push_back({"close", ToValue::makeBuiltin(
+        [connFd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (*connFd >= 0) { close(*connFd); *connFd = -1; }
+            return ToValue::makeNone();
+        }
+    )});
+
+    return conn;
+}
+
+// Helper: create a TCP server object
+static ToValuePtr makeTCPServerObject(int serverFd) {
+    auto fd = std::make_shared<int>(serverFd);
+    auto srv = ToValue::makeDict({});
+
+    // server.accept() — wait for and accept a connection
+    srv->dictVal.push_back({"accept", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            struct sockaddr_in clientAddr;
+            socklen_t clientLen = sizeof(clientAddr);
+            int clientFd = accept(*fd, (struct sockaddr*)&clientAddr, &clientLen);
+            if (clientFd < 0) throw ToRuntimeError("accept() failed");
+            char addrStr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &clientAddr.sin_addr, addrStr, sizeof(addrStr));
+            return makeConnectionObject(clientFd, addrStr, ntohs(clientAddr.sin_port));
+        }
+    )});
+
+    // server.close()
+    srv->dictVal.push_back({"close", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (*fd >= 0) { close(*fd); *fd = -1; }
+            return ToValue::makeNone();
+        }
+    )});
+
+    return srv;
+}
+
+// Helper: create a UDP socket object
+static ToValuePtr makeUDPSocketObject(int sockFd) {
+    auto fd = std::make_shared<int>(sockFd);
+    auto sock = ToValue::makeDict({});
+
+    // sock.receive(max_bytes?) — receive data + sender info
+    sock->dictVal.push_back({"receive", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            int maxBytes = 4096;
+            if (!args.empty() && args[0]->type == ToValue::Type::INT) maxBytes = (int)args[0]->intVal;
+            std::vector<char> buf(maxBytes);
+            struct sockaddr_in senderAddr;
+            socklen_t senderLen = sizeof(senderAddr);
+            ssize_t n = recvfrom(*fd, buf.data(), maxBytes, 0,
+                                  (struct sockaddr*)&senderAddr, &senderLen);
+            if (n < 0) throw ToRuntimeError("recvfrom() failed");
+            char addrStr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &senderAddr.sin_addr, addrStr, sizeof(addrStr));
+            return ToValue::makeDict({
+                {"data", ToValue::makeString(std::string(buf.data(), n))},
+                {"address", ToValue::makeString(addrStr)},
+                {"port", ToValue::makeInt(ntohs(senderAddr.sin_port))}
+            });
+        }
+    )});
+
+    // sock.send(data, address, port)
+    sock->dictVal.push_back({"send", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() < 3) throw ToRuntimeError("sock.send() takes 3 arguments (data, address, port)");
+            std::string data = args[0]->toString();
+            std::string addr = args[1]->strVal;
+            int port = (int)args[2]->intVal;
+
+            struct sockaddr_in destAddr;
+            memset(&destAddr, 0, sizeof(destAddr));
+            destAddr.sin_family = AF_INET;
+            destAddr.sin_port = htons(port);
+            inet_pton(AF_INET, addr.c_str(), &destAddr.sin_addr);
+
+            ssize_t sent = sendto(*fd, data.c_str(), data.size(), 0,
+                                   (struct sockaddr*)&destAddr, sizeof(destAddr));
+            return ToValue::makeInt(sent);
+        }
+    )});
+
+    // sock.send_to(data, addr_dict) — send using address dict from receive
+    sock->dictVal.push_back({"send_to", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() < 2) throw ToRuntimeError("sock.send_to() takes 2 arguments (data, addr)");
+            std::string data = args[0]->toString();
+            std::string addr;
+            int port = 0;
+            if (args[1]->type == ToValue::Type::DICT) {
+                for (auto& p : args[1]->dictVal) {
+                    if (p.first == "address") addr = p.second->strVal;
+                    if (p.first == "port") port = (int)p.second->intVal;
+                }
+            }
+            struct sockaddr_in destAddr;
+            memset(&destAddr, 0, sizeof(destAddr));
+            destAddr.sin_family = AF_INET;
+            destAddr.sin_port = htons(port);
+            inet_pton(AF_INET, addr.c_str(), &destAddr.sin_addr);
+            ssize_t sent = sendto(*fd, data.c_str(), data.size(), 0,
+                                   (struct sockaddr*)&destAddr, sizeof(destAddr));
+            return ToValue::makeInt(sent);
+        }
+    )});
+
+    // sock.close()
+    sock->dictVal.push_back({"close", ToValue::makeBuiltin(
+        [fd](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (*fd >= 0) { close(*fd); *fd = -1; }
+            return ToValue::makeNone();
+        }
+    )});
+
+    return sock;
+}
+
+void registerNetModule(EnvPtr env) {
+    auto mod = ToValue::makeDict({});
+
+    // net.listen(protocol, port) — create a TCP or UDP server
+    mod->dictVal.push_back({"listen", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() < 2) throw ToRuntimeError("net.listen() takes 2 arguments (protocol, port)");
+            std::string proto = args[0]->strVal;
+            int port = (int)args[1]->intVal;
+
+            if (proto == "tcp") {
+                int fd = socket(AF_INET, SOCK_STREAM, 0);
+                if (fd < 0) throw ToRuntimeError("Failed to create TCP socket");
+                int opt = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+                struct sockaddr_in addr;
+                memset(&addr, 0, sizeof(addr));
+                addr.sin_family = AF_INET;
+                addr.sin_addr.s_addr = INADDR_ANY;
+                addr.sin_port = htons(port);
+
+                if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+                    close(fd);
+                    throw ToRuntimeError("Failed to bind TCP socket to port " + std::to_string(port));
+                }
+                if (::listen(fd, 128) < 0) {
+                    close(fd);
+                    throw ToRuntimeError("Failed to listen on TCP socket");
+                }
+                return makeTCPServerObject(fd);
+
+            } else if (proto == "udp") {
+                int fd = socket(AF_INET, SOCK_DGRAM, 0);
+                if (fd < 0) throw ToRuntimeError("Failed to create UDP socket");
+                int opt = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+                struct sockaddr_in addr;
+                memset(&addr, 0, sizeof(addr));
+                addr.sin_family = AF_INET;
+                addr.sin_addr.s_addr = INADDR_ANY;
+                addr.sin_port = htons(port);
+
+                if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+                    close(fd);
+                    throw ToRuntimeError("Failed to bind UDP socket to port " + std::to_string(port));
+                }
+                return makeUDPSocketObject(fd);
+            }
+
+            throw ToRuntimeError("Unknown protocol: " + proto + " (use 'tcp' or 'udp')");
+        }
+    )});
+
+    // net.connect(protocol, host, port) — connect to a remote server
+    mod->dictVal.push_back({"connect", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() < 3) throw ToRuntimeError("net.connect() takes 3 arguments (protocol, host, port)");
+            std::string proto = args[0]->strVal;
+            std::string host = args[1]->strVal;
+            int port = (int)args[2]->intVal;
+
+            if (proto == "tcp") {
+                int fd = socket(AF_INET, SOCK_STREAM, 0);
+                if (fd < 0) throw ToRuntimeError("Failed to create socket");
+
+                // Resolve hostname
+                struct addrinfo hints, *result;
+                memset(&hints, 0, sizeof(hints));
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_STREAM;
+
+                std::string portStr = std::to_string(port);
+                if (getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result) != 0) {
+                    close(fd);
+                    throw ToRuntimeError("Cannot resolve host: " + host);
+                }
+
+                if (connect(fd, result->ai_addr, result->ai_addrlen) < 0) {
+                    freeaddrinfo(result);
+                    close(fd);
+                    throw ToRuntimeError("Cannot connect to " + host + ":" + std::to_string(port));
+                }
+                freeaddrinfo(result);
+
+                return makeConnectionObject(fd, host, port);
+
+            } else if (proto == "udp") {
+                int fd = socket(AF_INET, SOCK_DGRAM, 0);
+                if (fd < 0) throw ToRuntimeError("Failed to create UDP socket");
+                return makeUDPSocketObject(fd);
+            }
+
+            throw ToRuntimeError("Unknown protocol: " + proto);
+        }
+    )});
+
+    // net.resolve(hostname) — DNS lookup
+    mod->dictVal.push_back({"resolve", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("net.resolve() takes 1 string argument");
+
+            struct addrinfo hints, *result;
+            memset(&hints, 0, sizeof(hints));
+            hints.ai_family = AF_INET;
+
+            if (getaddrinfo(args[0]->strVal.c_str(), nullptr, &hints, &result) != 0) {
+                return ToValue::makeNone();
+            }
+
+            std::vector<ToValuePtr> addresses;
+            for (auto* p = result; p != nullptr; p = p->ai_next) {
+                char addrStr[INET_ADDRSTRLEN];
+                struct sockaddr_in* ipv4 = (struct sockaddr_in*)p->ai_addr;
+                inet_ntop(AF_INET, &ipv4->sin_addr, addrStr, sizeof(addrStr));
+                addresses.push_back(ToValue::makeString(addrStr));
+            }
+            freeaddrinfo(result);
+
+            if (addresses.empty()) return ToValue::makeNone();
+            if (addresses.size() == 1) return addresses[0];
+            return ToValue::makeList(std::move(addresses));
+        }
+    )});
+
+    env->define("net", mod);
+}
