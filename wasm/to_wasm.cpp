@@ -5,6 +5,7 @@
 #include "../src/lexer.h"
 #include "../src/parser.h"
 #include "../src/interpreter.h"
+#include "../src/error.h"
 
 // Capture stdout to a string buffer
 static std::string outputBuffer;

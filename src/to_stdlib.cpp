@@ -524,6 +524,7 @@ void registerProcessModule(EnvPtr env) {
 // ========================
 
 #ifndef __EMSCRIPTEN__
+#include <cstring>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
