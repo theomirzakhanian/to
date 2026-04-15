@@ -1702,15 +1702,17 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
     auto server = std::make_shared<HttpServer>();
     auto webModule = ToValue::makeDict({});
 
-    // web.serve(port, handler) — start HTTP server
+    // Shared route table and middleware chain
+    auto routes = std::make_shared<std::vector<std::tuple<std::string, std::string, ToValuePtr>>>();
+    auto middleware = std::make_shared<std::vector<ToValuePtr>>();
+
+    // web.serve(port, handler) — start server with single handler
     webModule->dictVal.push_back({"serve", ToValue::makeBuiltin(
         [interp, server](std::vector<ToValuePtr> args) -> ToValuePtr {
             if (args.size() != 2)
                 throw ToRuntimeError("web.serve() takes 2 arguments (port, handler)");
             if (args[0]->type != ToValue::Type::INT)
                 throw ToRuntimeError("web.serve() port must be an integer");
-            if (args[1]->type != ToValue::Type::FUNCTION && args[1]->type != ToValue::Type::BUILTIN)
-                throw ToRuntimeError("web.serve() handler must be a function");
 
             int port = (int)args[0]->intVal;
             auto handlerVal = args[1];
@@ -1719,6 +1721,337 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
                 return interp->callFunction(handlerVal, {req}, 0);
             });
             return ToValue::makeNone();
+        }
+    )});
+
+    // web.get(path, handler) — register GET route
+    webModule->dictVal.push_back({"get", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.get() takes 2 arguments (path, handler)");
+            routes->push_back({"GET", args[0]->strVal, args[1]});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.post(path, handler) — register POST route
+    webModule->dictVal.push_back({"post", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.post() takes 2 arguments (path, handler)");
+            routes->push_back({"POST", args[0]->strVal, args[1]});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.put(path, handler)
+    webModule->dictVal.push_back({"put", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.put() takes 2 arguments");
+            routes->push_back({"PUT", args[0]->strVal, args[1]});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.delete_(path, handler)
+    webModule->dictVal.push_back({"delete", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.delete() takes 2 arguments");
+            routes->push_back({"DELETE", args[0]->strVal, args[1]});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.route(method, path, handler) — register any method
+    webModule->dictVal.push_back({"route", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 3) throw ToRuntimeError("web.route() takes 3 arguments (method, path, handler)");
+            routes->push_back({args[0]->strVal, args[1]->strVal, args[2]});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.use(middleware_fn) — add middleware
+    webModule->dictVal.push_back({"use", ToValue::makeBuiltin(
+        [middleware](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.use() takes 1 argument (middleware function)");
+            middleware->push_back(args[0]);
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.listen(port) — start server with registered routes and middleware
+    webModule->dictVal.push_back({"listen", ToValue::makeBuiltin(
+        [interp, server, routes, middleware](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::INT)
+                throw ToRuntimeError("web.listen() takes a port number");
+
+            int port = (int)args[0]->intVal;
+            auto capturedRoutes = routes;
+            auto capturedMiddleware = middleware;
+
+            server->serve(port, [interp, capturedRoutes, capturedMiddleware](ToValuePtr req) -> ToValuePtr {
+                // Run middleware chain
+                for (auto& mw : *capturedMiddleware) {
+                    auto result = interp->callFunction(mw, {req}, 0);
+                    // If middleware returns a response (not none), short-circuit
+                    if (result->type == ToValue::Type::DICT) {
+                        bool hasStatus = false;
+                        for (auto& p : result->dictVal) {
+                            if (p.first == "status") { hasStatus = true; break; }
+                        }
+                        if (hasStatus) return result;
+                    }
+                    // If middleware returns a modified request, use it
+                    if (result->type == ToValue::Type::DICT) req = result;
+                }
+
+                // Match routes
+                std::string method, path;
+                for (auto& p : req->dictVal) {
+                    if (p.first == "method") method = p.second->strVal;
+                    if (p.first == "path") path = p.second->strVal;
+                }
+
+                for (auto& [rMethod, rPath, rHandler] : *capturedRoutes) {
+                    // Simple path matching with :param support
+                    if (rMethod != method && rMethod != "*") continue;
+
+                    // Check for path params: /users/:id
+                    if (rPath.find(':') != std::string::npos) {
+                        // Split both paths and compare segments
+                        std::vector<std::string> routeParts, reqParts;
+                        std::istringstream rs(rPath), qs(path);
+                        std::string seg;
+                        while (std::getline(rs, seg, '/')) if (!seg.empty()) routeParts.push_back(seg);
+                        while (std::getline(qs, seg, '/')) if (!seg.empty()) reqParts.push_back(seg);
+
+                        if (routeParts.size() != reqParts.size()) continue;
+
+                        bool match = true;
+                        std::vector<std::pair<std::string, ToValuePtr>> params;
+                        for (size_t i = 0; i < routeParts.size(); i++) {
+                            if (routeParts[i][0] == ':') {
+                                params.push_back({routeParts[i].substr(1), ToValue::makeString(reqParts[i])});
+                            } else if (routeParts[i] != reqParts[i]) {
+                                match = false;
+                                break;
+                            }
+                        }
+                        if (!match) continue;
+
+                        // Add path params to request
+                        for (auto& [k, v] : req->dictVal) {
+                            if (k == "params") {
+                                for (auto& p : params) v->dictVal.push_back(p);
+                                break;
+                            }
+                        }
+                        return interp->callFunction(rHandler, {req}, 0);
+                    }
+
+                    if (rPath == path) {
+                        return interp->callFunction(rHandler, {req}, 0);
+                    }
+                }
+
+                // 404
+                std::vector<std::pair<std::string, ToValuePtr>> resp;
+                resp.push_back({"status", ToValue::makeInt(404)});
+                resp.push_back({"body", ToValue::makeString("Not Found: " + path)});
+                return ToValue::makeDict(std::move(resp));
+            });
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.static(path, directory) — serve static files
+    webModule->dictVal.push_back({"static", ToValue::makeBuiltin(
+        [routes](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.static() takes 2 arguments (url_path, directory)");
+            std::string urlPrefix = args[0]->strVal;
+            std::string dir = args[1]->strVal;
+
+            auto capturedDir = std::make_shared<std::string>(dir);
+            auto capturedPrefix = std::make_shared<std::string>(urlPrefix);
+
+            routes->push_back({"GET", urlPrefix + "/*", ToValue::makeBuiltin(
+                [capturedDir, capturedPrefix](std::vector<ToValuePtr> reqArgs) -> ToValuePtr {
+                    std::string path;
+                    for (auto& p : reqArgs[0]->dictVal) {
+                        if (p.first == "path") path = p.second->strVal;
+                    }
+                    // Strip prefix
+                    std::string filePath = path.substr(capturedPrefix->size());
+                    if (filePath.empty() || filePath == "/") filePath = "/index.html";
+                    std::string fullPath = *capturedDir + filePath;
+
+                    // Security: prevent path traversal
+                    if (fullPath.find("..") != std::string::npos) {
+                        return ToValue::makeDict({{"status", ToValue::makeInt(403)},
+                            {"body", ToValue::makeString("Forbidden")}});
+                    }
+
+                    std::ifstream file(fullPath, std::ios::binary);
+                    if (!file.is_open()) {
+                        return ToValue::makeDict({{"status", ToValue::makeInt(404)},
+                            {"body", ToValue::makeString("Not found: " + filePath)}});
+                    }
+                    std::string content((std::istreambuf_iterator<char>(file)),
+                                         std::istreambuf_iterator<char>());
+
+                    // Detect content type
+                    std::string contentType = "application/octet-stream";
+                    if (filePath.find(".html") != std::string::npos) contentType = "text/html";
+                    else if (filePath.find(".css") != std::string::npos) contentType = "text/css";
+                    else if (filePath.find(".js") != std::string::npos) contentType = "application/javascript";
+                    else if (filePath.find(".json") != std::string::npos) contentType = "application/json";
+                    else if (filePath.find(".png") != std::string::npos) contentType = "image/png";
+                    else if (filePath.find(".jpg") != std::string::npos) contentType = "image/jpeg";
+                    else if (filePath.find(".svg") != std::string::npos) contentType = "image/svg+xml";
+                    else if (filePath.find(".txt") != std::string::npos) contentType = "text/plain";
+
+                    return ToValue::makeDict({
+                        {"status", ToValue::makeInt(200)},
+                        {"body", ToValue::makeString(content)},
+                        {"type", ToValue::makeString(contentType)}
+                    });
+                }
+            )});
+            return ToValue::makeNone();
+        }
+    )});
+
+    // web.redirect(url, status) — create a redirect response
+    webModule->dictVal.push_back({"redirect", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.redirect() takes 1-2 arguments");
+            int status = 302;
+            if (args.size() >= 2 && args[1]->type == ToValue::Type::INT) status = (int)args[1]->intVal;
+            return ToValue::makeDict({
+                {"status", ToValue::makeInt(status)},
+                {"body", ToValue::makeString("")},
+                {"headers", ToValue::makeDict({{"Location", ToValue::makeString(args[0]->strVal)}})}
+            });
+        }
+    )});
+
+    // web.cors(origin) — create CORS middleware
+    webModule->dictVal.push_back({"cors", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            std::string origin = "*";
+            if (!args.empty() && args[0]->type == ToValue::Type::STRING) origin = args[0]->strVal;
+
+            auto capturedOrigin = std::make_shared<std::string>(origin);
+            return ToValue::makeBuiltin(
+                [capturedOrigin](std::vector<ToValuePtr> reqArgs) -> ToValuePtr {
+                    auto req = reqArgs[0];
+                    // Check for preflight
+                    std::string method;
+                    for (auto& p : req->dictVal) {
+                        if (p.first == "method") method = p.second->strVal;
+                    }
+                    if (method == "OPTIONS") {
+                        return ToValue::makeDict({
+                            {"status", ToValue::makeInt(204)},
+                            {"body", ToValue::makeString("")},
+                            {"headers", ToValue::makeDict({
+                                {"Access-Control-Allow-Origin", ToValue::makeString(*capturedOrigin)},
+                                {"Access-Control-Allow-Methods", ToValue::makeString("GET, POST, PUT, DELETE, OPTIONS")},
+                                {"Access-Control-Allow-Headers", ToValue::makeString("Content-Type, Authorization")}
+                            })}
+                        });
+                    }
+                    // For non-preflight, just pass through (CORS headers added by response builder)
+                    return ToValue::makeNone();
+                }
+            );
+        }
+    )});
+
+    // web.html(content) — shorthand for HTML response
+    webModule->dictVal.push_back({"html", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.html() takes 1 argument");
+            return ToValue::makeDict({
+                {"status", ToValue::makeInt(200)},
+                {"body", ToValue::makeString(args[0]->strVal)},
+                {"type", ToValue::makeString("text/html; charset=utf-8")}
+            });
+        }
+    )});
+
+    // web.json_response(data, status) — shorthand for JSON response
+    webModule->dictVal.push_back({"json_response", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.json_response() takes 1-2 arguments");
+            int status = 200;
+            if (args.size() >= 2 && args[1]->type == ToValue::Type::INT) status = (int)args[1]->intVal;
+            return ToValue::makeDict({
+                {"status", ToValue::makeInt(status)},
+                {"body", args[0]}
+            });
+        }
+    )});
+
+    // web.error(status, message) — shorthand for error response
+    webModule->dictVal.push_back({"error", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            int status = 500;
+            std::string message = "Internal Server Error";
+            if (!args.empty() && args[0]->type == ToValue::Type::INT) status = (int)args[0]->intVal;
+            if (args.size() >= 2 && args[1]->type == ToValue::Type::STRING) message = args[1]->strVal;
+            return ToValue::makeDict({
+                {"status", ToValue::makeInt(status)},
+                {"body", ToValue::makeDict({{"error", ToValue::makeString(message)}})}
+            });
+        }
+    )});
+
+    // web.fetch(url) — HTTP client (GET request)
+    webModule->dictVal.push_back({"fetch", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty() || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("web.fetch() takes a URL string");
+
+            std::string url = args[0]->strVal;
+            // Use curl under the hood
+            std::string cmd = "curl -s -w '\\n%{http_code}' '" + url + "' 2>/dev/null";
+            FILE* pipe = popen(cmd.c_str(), "r");
+            if (!pipe) throw ToRuntimeError("web.fetch() failed — is curl installed?");
+
+            char buffer[4096];
+            std::string output;
+            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                output += buffer;
+            }
+            int exitCode = pclose(pipe);
+
+            // Split body and status code (status is last line)
+            int statusCode = 0;
+            std::string body = output;
+            size_t lastNewline = output.rfind('\n');
+            if (lastNewline != std::string::npos && lastNewline > 0) {
+                size_t secondLast = output.rfind('\n', lastNewline - 1);
+                std::string statusStr = output.substr(lastNewline + 1);
+                if (!statusStr.empty()) {
+                    try { statusCode = std::stoi(statusStr); } catch (...) {}
+                    body = output.substr(0, lastNewline);
+                }
+            }
+
+            // Try to parse body as JSON
+            ToValuePtr bodyVal = ToValue::makeString(body);
+            if (!body.empty() && (body[0] == '{' || body[0] == '[')) {
+                try {
+                    JsonParser parser(body);
+                    bodyVal = parser.parse();
+                } catch (...) {}
+            }
+
+            return ToValue::makeDict({
+                {"status", ToValue::makeInt(statusCode)},
+                {"body", bodyVal},
+                {"ok", ToValue::makeBool(statusCode >= 200 && statusCode < 300)}
+            });
         }
     )});
 
@@ -1737,6 +2070,118 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
                 throw ToRuntimeError("web.parse_json() takes 1 string argument");
             JsonParser parser(args[0]->strVal);
             return parser.parse();
+        }
+    )});
+
+    // web.cookie(name, value, options) — create Set-Cookie header value
+    webModule->dictVal.push_back({"cookie", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() < 2) throw ToRuntimeError("web.cookie() takes 2-3 arguments (name, value, options?)");
+            std::string cookie = args[0]->strVal + "=" + args[1]->strVal;
+            if (args.size() >= 3 && args[2]->type == ToValue::Type::DICT) {
+                for (auto& [k, v] : args[2]->dictVal) {
+                    if (k == "path") cookie += "; Path=" + v->strVal;
+                    else if (k == "max_age") cookie += "; Max-Age=" + std::to_string(v->intVal);
+                    else if (k == "http_only" && v->boolVal) cookie += "; HttpOnly";
+                    else if (k == "secure" && v->boolVal) cookie += "; Secure";
+                    else if (k == "same_site") cookie += "; SameSite=" + v->strVal;
+                }
+            }
+            return ToValue::makeString(cookie);
+        }
+    )});
+
+    // web.parse_cookies(request) — parse Cookie header into dict
+    webModule->dictVal.push_back({"parse_cookies", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.parse_cookies() takes 1 argument");
+            auto req = args[0];
+            std::string cookieHeader;
+            for (auto& p : req->dictVal) {
+                if (p.first == "headers" && p.second->type == ToValue::Type::DICT) {
+                    for (auto& h : p.second->dictVal) {
+                        if (h.first == "cookie") { cookieHeader = h.second->strVal; break; }
+                    }
+                }
+            }
+            std::vector<std::pair<std::string, ToValuePtr>> cookies;
+            if (!cookieHeader.empty()) {
+                std::istringstream stream(cookieHeader);
+                std::string pair;
+                while (std::getline(stream, pair, ';')) {
+                    size_t eq = pair.find('=');
+                    if (eq != std::string::npos) {
+                        std::string key = pair.substr(0, eq);
+                        std::string val = pair.substr(eq + 1);
+                        // Trim whitespace
+                        size_t s = key.find_first_not_of(" ");
+                        if (s != std::string::npos) key = key.substr(s);
+                        cookies.push_back({key, ToValue::makeString(val)});
+                    }
+                }
+            }
+            return ToValue::makeDict(std::move(cookies));
+        }
+    )});
+
+    // web.form_data(request) — parse URL-encoded form body
+    webModule->dictVal.push_back({"form_data", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.empty()) throw ToRuntimeError("web.form_data() takes 1 argument (request)");
+            std::string body;
+            for (auto& p : args[0]->dictVal) {
+                if (p.first == "body") { body = p.second->strVal; break; }
+            }
+            std::vector<std::pair<std::string, ToValuePtr>> fields;
+            std::istringstream stream(body);
+            std::string pair;
+            while (std::getline(stream, pair, '&')) {
+                size_t eq = pair.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = pair.substr(0, eq);
+                    std::string val = pair.substr(eq + 1);
+                    // Basic URL decode
+                    std::string decoded;
+                    for (size_t i = 0; i < val.size(); i++) {
+                        if (val[i] == '%' && i + 2 < val.size()) {
+                            int hex = std::stoi(val.substr(i + 1, 2), nullptr, 16);
+                            decoded += (char)hex;
+                            i += 2;
+                        } else if (val[i] == '+') {
+                            decoded += ' ';
+                        } else {
+                            decoded += val[i];
+                        }
+                    }
+                    fields.push_back({key, ToValue::makeString(decoded)});
+                }
+            }
+            return ToValue::makeDict(std::move(fields));
+        }
+    )});
+
+    // web.template_(html, data) — simple template engine: replaces {{ key }} with values
+    webModule->dictVal.push_back({"template", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 2) throw ToRuntimeError("web.template() takes 2 arguments (html, data)");
+            std::string html = args[0]->strVal;
+            auto data = args[1];
+            if (data->type != ToValue::Type::DICT) throw ToRuntimeError("web.template() data must be a dict");
+
+            // Replace {{ key }} patterns
+            for (auto& [key, val] : data->dictVal) {
+                std::string placeholder = "{{ " + key + " }}";
+                std::string placeholder2 = "{{" + key + "}}";
+                std::string replacement = val->toString();
+                size_t pos;
+                while ((pos = html.find(placeholder)) != std::string::npos) {
+                    html.replace(pos, placeholder.size(), replacement);
+                }
+                while ((pos = html.find(placeholder2)) != std::string::npos) {
+                    html.replace(pos, placeholder2.size(), replacement);
+                }
+            }
+            return ToValue::makeString(html);
         }
     )});
 

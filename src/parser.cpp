@@ -1028,7 +1028,17 @@ ASTNodePtr Parser::parsePostfix() {
             bool isOptional = check(TokenType::QUESTION_DOT);
             int line = current().line;
             advance();
-            Token memberTok = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+            // Allow keywords as member names (e.g. web.use, dict.or)
+            Token memberTok = current();
+            if (check(TokenType::IDENTIFIER) || check(TokenType::USE) || check(TokenType::FROM) ||
+                check(TokenType::AS) || check(TokenType::IN) || check(TokenType::OR) ||
+                check(TokenType::AND) || check(TokenType::NOT) ||
+                check(TokenType::PRINT) || check(TokenType::RETURN) || check(TokenType::BREAK) ||
+                check(TokenType::CONTINUE)) {
+                memberTok = advance();
+            } else {
+                memberTok = expect(TokenType::IDENTIFIER, "Expected member name after '.'");
+            }
 
             // Check if this is a method call: obj.method(args)
             if (check(TokenType::LPAREN)) {
