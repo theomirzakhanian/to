@@ -55,7 +55,7 @@ private:
 class HttpServer {
 public:
     using Handler = std::function<ToValuePtr(ToValuePtr)>;
-    static std::string getStatusText(int code) { return "OK"; }
+    static std::string getStatusText(int code);
 };
 #endif
 
