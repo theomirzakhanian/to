@@ -173,6 +173,13 @@ ASTNodePtr Parser::parseStatement() {
 
 ASTNodePtr Parser::parsePrint() {
     int line = current().line;
+
+    // If followed by '(', treat as function call expression: print(a, b, c)
+    if (peek().type == TokenType::LPAREN) {
+        // Parse as expression statement: print(...) is a call
+        return parseAssignmentOrExpr();
+    }
+
     advance(); // skip 'print'
     auto node = std::make_shared<ASTNode>();
     node->type = NodeType::PrintStmt;
@@ -1172,8 +1179,8 @@ ASTNodePtr Parser::parsePrimary() {
         return ASTNode::makeIdentifier("my", line);
     }
 
-    // Identifier
-    if (check(TokenType::IDENTIFIER)) {
+    // Identifier (including 'print' as a value in expression context)
+    if (check(TokenType::IDENTIFIER) || check(TokenType::PRINT)) {
         auto tok = advance();
         return ASTNode::makeIdentifier(tok.value, tok.line);
     }

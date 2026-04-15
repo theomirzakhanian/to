@@ -8,6 +8,16 @@
 #include <fstream>
 
 void registerBuiltins(EnvPtr env) {
+    // print(values...) — also works as `print "x"` statement
+    env->define("print", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
+        for (size_t i = 0; i < args.size(); i++) {
+            if (i > 0) std::cout << " ";
+            std::cout << args[i]->toString();
+        }
+        std::cout << std::endl;
+        return ToValue::makeNone();
+    }));
+
     // input(prompt) — read a line from stdin
     env->define("input", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
         if (!args.empty()) {
