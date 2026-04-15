@@ -1700,6 +1700,29 @@ ToValuePtr Interpreter::callDictMethod(ToValuePtr dict, const std::string& metho
 // Web Module
 // ========================
 
+#ifdef __EMSCRIPTEN__
+void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
+    auto webModule = ToValue::makeDict({});
+    webModule->dictVal.push_back({"serve", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr>) -> ToValuePtr { throw ToRuntimeError("HTTP server not available in browser"); }
+    )});
+    webModule->dictVal.push_back({"json", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 1) throw ToRuntimeError("web.json() takes 1 argument");
+            return ToValue::makeString(jsonStringify(args[0]));
+        }
+    )});
+    webModule->dictVal.push_back({"parse_json", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr> args) -> ToValuePtr {
+            if (args.size() != 1 || args[0]->type != ToValue::Type::STRING)
+                throw ToRuntimeError("web.parse_json() takes 1 string argument");
+            JsonParser parser(args[0]->strVal);
+            return parser.parse();
+        }
+    )});
+    env->define("web", webModule);
+}
+#else
 void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
     auto server = std::make_shared<HttpServer>();
     auto webModule = ToValue::makeDict({});
@@ -2189,6 +2212,7 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
 
     env->define("web", webModule);
 }
+#endif // __EMSCRIPTEN__
 
 // ========================
 // JSON Module
