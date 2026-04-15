@@ -1,17 +1,20 @@
 #include "http.h"
 #include "error.h"
 
+#include <cstring>
+#include <sstream>
+#include <iostream>
+#include <algorithm>
+
+#ifndef __EMSCRIPTEN__
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <csignal>
-#include <cstring>
-#include <sstream>
-#include <iostream>
-#include <algorithm>
 #include <thread>
 #include <mutex>
+#endif
 
 // ========================
 // HTTP Request Parsing
@@ -239,6 +242,7 @@ std::string HttpServer::getStatusText(int code) {
     }
 }
 
+#ifndef __EMSCRIPTEN__
 void HttpServer::handleClient(int clientFd, Handler& handler) {
     // Read request
     char buffer[8192];
@@ -380,9 +384,10 @@ void HttpServer::serveRouted(int port) {
 
     serve(port, routeHandler);
 }
+#endif // __EMSCRIPTEN__
 
 // ========================
-// Web Module Registration
+// JSON utilities (available in all builds)
 // ========================
 
 std::string jsonStringify(ToValuePtr val) {

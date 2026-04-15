@@ -6,3 +6,6 @@ build/
 .DS_Store
 .vscode/
 *.dSYM/
+
+# Internal planning — not pushed
+ROADMAP.md

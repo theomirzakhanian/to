@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release
+
+      - name: Test
+        run: |
+          cd build
+          PASS=0; FAIL=0
+          for f in ../tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*) continue;; esac
+            if ./to run "$f" > /dev/null 2>&1; then PASS=$((PASS+1)); else echo "FAIL: $f"; FAIL=$((FAIL+1)); fi
+          done
+          echo "$PASS passed, $FAIL failed"
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Package
+        run: |
+          cp build/to to-macos
+          chmod +x to-macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: to-macos
+          path: to-macos
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release
+
+      - name: Test
+        run: |
+          cd build
+          PASS=0; FAIL=0
+          for f in ../tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*) continue;; esac
+            if ./to run "$f" > /dev/null 2>&1; then PASS=$((PASS+1)); else echo "FAIL: $f"; FAIL=$((FAIL+1)); fi
+          done
+          echo "$PASS passed, $FAIL failed"
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Package
+        run: |
+          cp build/to to-linux
+          chmod +x to-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: to-linux
+          path: to-linux
+
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.51
+
+      - name: Build WASM
+        run: |
+          mkdir build-wasm && cd build-wasm
+          emcc -O2 -std=c++17 \
+            -s EXPORTED_FUNCTIONS='["_to_eval","_to_version","_malloc","_free"]' \
+            -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8"]' \
+            -s MODULARIZE=1 \
+            -s EXPORT_NAME='createToModule' \
+            -s ALLOW_MEMORY_GROWTH=1 \
+            -s ENVIRONMENT=web \
+            -D__EMSCRIPTEN__ \
+            -I../src \
+            ../wasm/to_wasm.cpp \
+            ../src/lexer.cpp \
+            ../src/parser.cpp \
+            ../src/interpreter.cpp \
+            ../src/environment.cpp \
+            ../src/error.cpp \
+            ../src/builtins.cpp \
+            ../src/http.cpp \
+            ../src/ffi.cpp \
+            ../src/to_stdlib.cpp \
+            ../src/vm.cpp \
+            ../src/codegen.cpp \
+            ../src/formatter.cpp \
+            ../src/pkg.cpp \
+            -o to.js
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: to-wasm
+          path: |
+            build-wasm/to.js
+            build-wasm/to.wasm
+
+  release:
+    needs: [build-macos, build-linux, build-wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: to-macos
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: to-linux
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: to-wasm
+          path: artifacts/wasm/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/to-macos
+            artifacts/to-linux
+            artifacts/wasm/build-wasm/to.js
+            artifacts/wasm/build-wasm/to.wasm
+          body: |
+            ## To ${{ github.ref_name }}
+
+            ### Downloads
+            - **macOS**: `to-macos` (Intel + Apple Silicon via Rosetta)
+            - **Linux**: `to-linux` (x86_64)
+            - **WASM**: `to.js` + `to.wasm` (for browser playground)
+
+            ### Install
+            ```bash
+            # macOS
+            curl -L https://github.com/theomirzakhanian/to/releases/download/${{ github.ref_name }}/to-macos -o to
+            chmod +x to && sudo mv to /usr/local/bin/
+
+            # Linux
+            curl -L https://github.com/theomirzakhanian/to/releases/download/${{ github.ref_name }}/to-linux -o to
+            chmod +x to && sudo mv to /usr/local/bin/
+            ```

@@ -33,28 +33,31 @@ struct HttpResponse {
     std::string serialize() const;
 };
 
-// The actual TCP server
+#ifndef __EMSCRIPTEN__
 class HttpServer {
 public:
     using Handler = std::function<ToValuePtr(ToValuePtr)>;
 
     HttpServer() = default;
 
-    // Start listening and serving
     void serve(int port, Handler handler);
-
-    // Route-based serving
     void addRoute(const std::string& method, const std::string& path, Handler handler);
     void serveRouted(int port);
-
     static std::string getStatusText(int code);
 
 private:
     std::vector<std::tuple<std::string, std::string, Handler>> routes;
     Handler defaultHandler;
-
     void handleClient(int clientFd, Handler& handler);
 };
+#else
+// Stub for WASM builds
+class HttpServer {
+public:
+    using Handler = std::function<ToValuePtr(ToValuePtr)>;
+    static std::string getStatusText(int code) { return "OK"; }
+};
+#endif
 
 // JSON utilities
 std::string jsonStringify(ToValuePtr val);

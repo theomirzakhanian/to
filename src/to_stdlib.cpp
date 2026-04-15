@@ -523,6 +523,7 @@ void registerProcessModule(EnvPtr env) {
 // Net Module (TCP/UDP sockets)
 // ========================
 
+#ifndef __EMSCRIPTEN__
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -821,3 +822,16 @@ void registerNetModule(EnvPtr env) {
 
     env->define("net", mod);
 }
+#else
+// WASM stub
+void registerNetModule(EnvPtr env) {
+    auto mod = ToValue::makeDict({});
+    mod->dictVal.push_back({"listen", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr>) -> ToValuePtr { throw ToRuntimeError("Networking not available in browser"); }
+    )});
+    mod->dictVal.push_back({"connect", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr>) -> ToValuePtr { throw ToRuntimeError("Networking not available in browser"); }
+    )});
+    env->define("net", mod);
+}
+#endif

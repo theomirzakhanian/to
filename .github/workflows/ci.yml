@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build . --config Release
+
+      - name: Run tests
+        run: |
+          cd build
+          PASS=0; FAIL=0
+          for f in ../tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*) continue;; esac
+            if timeout 30 ./to run "$f" > /dev/null 2>&1; then
+              PASS=$((PASS+1))
+            else
+              echo "FAIL: $f"
+              FAIL=$((FAIL+1))
+            fi
+          done
+          echo "Results: $PASS passed, $FAIL failed"
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Test CLI commands
+        run: |
+          ./build/to version
+          ./build/to check tests/examples/fibonacci.to
+          echo "CLI OK"

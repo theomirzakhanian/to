@@ -1,5 +1,6 @@
 #include "ffi.h"
 #include "error.h"
+#ifndef __EMSCRIPTEN__
 #include <dlfcn.h>
 #include <iostream>
 #include <sstream>
@@ -406,3 +407,15 @@ void registerFFIModule(EnvPtr env) {
 
     env->define("ffi", ffiModule);
 }
+#else
+// WASM stub
+void registerFFIModule(EnvPtr env) {
+    auto ffiModule = ToValue::makeDict({});
+    ffiModule->dictVal.push_back({"open", ToValue::makeBuiltin(
+        [](std::vector<ToValuePtr>) -> ToValuePtr {
+            throw ToRuntimeError("FFI is not available in the browser");
+        }
+    )});
+    env->define("ffi", ffiModule);
+}
+#endif
