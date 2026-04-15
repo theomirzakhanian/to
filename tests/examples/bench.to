@@ -1,0 +1,15 @@
+~ Benchmark: VM vs interpreter
+
+to fib(n):
+  if n <= 1:
+    return n
+  return fib(n - 1) + fib(n - 2)
+
+print "fib(25) = {fib(25)}"
+
+x = 0
+while x < 1000000:
+  x = x + 1
+print "Counted to {x}"
+
+print "Benchmark done"

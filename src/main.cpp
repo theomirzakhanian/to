@@ -5,6 +5,7 @@
 #include "error.h"
 #include "pkg.h"
 #include "formatter.h"
+#include "vm.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -27,6 +28,7 @@ void printUsage() {
               << "  to get <user/repo>@<version>  Install a specific version\n"
               << "  to remove <name>              Uninstall a package\n"
               << "  to list                       List installed packages\n"
+              << "  to fast <file.to>             Run with bytecode VM (faster)\n"
               << "  to fmt <file.to>              Format a .to file\n"
               << "  to version                    Print version\n";
 }
@@ -375,6 +377,36 @@ int main(int argc, char* argv[]) {
             return 0;
         } catch (ToError& e) {
             std::cerr << e.format() << "\n";
+            return 1;
+        }
+    }
+
+    if (command == "fast") {
+        if (argc < 3) {
+            std::cerr << "Error: Missing file argument\n";
+            std::cerr << "Usage: to fast <file.to>\n";
+            return 1;
+        }
+        std::string filepath = argv[2];
+        std::string source = readFile(filepath);
+        try {
+            Lexer lexer(source, filepath);
+            auto tokens = lexer.tokenize();
+            Parser parser(tokens, filepath);
+            auto ast = parser.parse();
+            Compiler compiler;
+            Chunk chunk = compiler.compile(ast);
+            VM vm;
+            vm.run(chunk);
+            return 0;
+        } catch (ToRuntimeError& e) {
+            std::cerr << e.format() << "\n";
+            return 1;
+        } catch (ToError& e) {
+            std::cerr << e.format() << "\n";
+            return 1;
+        } catch (std::runtime_error& e) {
+            std::cerr << "Runtime error: " << e.what() << "\n";
             return 1;
         }
     }

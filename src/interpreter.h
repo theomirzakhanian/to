@@ -40,12 +40,12 @@ public:
     bool stepMode = false;
     void debugPrompt(ASTNodePtr node, EnvPtr env);
 
+    // Statement execution (public for VM hybrid calls)
+    void execStatement(ASTNodePtr node, EnvPtr env);
+
 private:
     std::string filename;
     EnvPtr globalEnv;
-
-    // Statement execution
-    void execStatement(ASTNodePtr node, EnvPtr env);
     void execPrint(ASTNodePtr node, EnvPtr env);
     void execAssignment(ASTNodePtr node, EnvPtr env);
     void execConstDecl(ASTNodePtr node, EnvPtr env);

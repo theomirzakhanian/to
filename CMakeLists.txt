@@ -18,6 +18,7 @@ add_executable(to
     src/to_stdlib.cpp
     src/pkg.cpp
     src/formatter.cpp
+    src/vm.cpp
 )
 
 target_include_directories(to PRIVATE src include)
