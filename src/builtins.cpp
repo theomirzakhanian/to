@@ -1,4 +1,5 @@
 #include "builtins.h"
+#include "methods.h"
 #include "error.h"
 #include <iostream>
 #include <cmath>
@@ -31,13 +32,9 @@ void registerBuiltins(EnvPtr env) {
     // len(x) — length of string/list/dict
     env->define("len", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
         if (args.size() != 1) throw ToRuntimeError("len() takes exactly 1 argument");
-        auto& v = args[0];
-        switch (v->type) {
-            case ToValue::Type::STRING: return ToValue::makeInt(v->strVal.size());
-            case ToValue::Type::LIST: return ToValue::makeInt(v->listVal.size());
-            case ToValue::Type::DICT: return ToValue::makeInt(v->dictVal.size());
-            default: throw ToRuntimeError("len() not supported for type " + v->typeName());
-        }
+        int64_t n = args[0]->length();
+        if (n < 0) throw ToRuntimeError("len() not supported for type " + args[0]->typeName());
+        return ToValue::makeInt(n);
     }));
 
     // type(x) — return type name as string
@@ -113,54 +110,24 @@ void registerBuiltins(EnvPtr env) {
     }));
 
     // min(a, b) or min(list)
-    env->define("min", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
-        if (args.size() == 1 && args[0]->type == ToValue::Type::LIST) {
-            auto& list = args[0]->listVal;
-            if (list.empty()) throw ToRuntimeError("min() of empty list");
-            auto result = list[0];
-            for (size_t i = 1; i < list.size(); i++) {
-                if (list[i]->type == ToValue::Type::INT && result->type == ToValue::Type::INT) {
-                    if (list[i]->intVal < result->intVal) result = list[i];
-                } else if (list[i]->type == ToValue::Type::FLOAT || result->type == ToValue::Type::FLOAT) {
-                    double a = result->type == ToValue::Type::INT ? (double)result->intVal : result->floatVal;
-                    double b = list[i]->type == ToValue::Type::INT ? (double)list[i]->intVal : list[i]->floatVal;
-                    if (b < a) result = list[i];
-                }
+    // min/max over any collection, or over the arguments themselves.
+    auto extreme = [](bool wantMin) {
+        return [wantMin](std::vector<ToValuePtr> args) -> ToValuePtr {
+            const char* what = wantMin ? "min()" : "max()";
+            std::vector<ToValuePtr> items;
+            if (args.size() == 1 && args[0]->length() >= 0) items = args[0]->elements();
+            else items = args;
+            if (items.empty()) throw ToRuntimeError(std::string(what) + " of an empty collection");
+            auto result = items[0];
+            for (size_t i = 1; i < items.size(); i++) {
+                int c = valueCompare(items[i], result);
+                if (wantMin ? c < 0 : c > 0) result = items[i];
             }
             return result;
-        }
-        if (args.size() == 2) {
-            double a = args[0]->type == ToValue::Type::INT ? (double)args[0]->intVal : args[0]->floatVal;
-            double b = args[1]->type == ToValue::Type::INT ? (double)args[1]->intVal : args[1]->floatVal;
-            return a <= b ? args[0] : args[1];
-        }
-        throw ToRuntimeError("min() requires 1 list or 2 arguments");
-    }));
-
-    // max(a, b) or max(list)
-    env->define("max", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
-        if (args.size() == 1 && args[0]->type == ToValue::Type::LIST) {
-            auto& list = args[0]->listVal;
-            if (list.empty()) throw ToRuntimeError("max() of empty list");
-            auto result = list[0];
-            for (size_t i = 1; i < list.size(); i++) {
-                if (list[i]->type == ToValue::Type::INT && result->type == ToValue::Type::INT) {
-                    if (list[i]->intVal > result->intVal) result = list[i];
-                } else if (list[i]->type == ToValue::Type::FLOAT || result->type == ToValue::Type::FLOAT) {
-                    double a = result->type == ToValue::Type::INT ? (double)result->intVal : result->floatVal;
-                    double b = list[i]->type == ToValue::Type::INT ? (double)list[i]->intVal : list[i]->floatVal;
-                    if (b > a) result = list[i];
-                }
-            }
-            return result;
-        }
-        if (args.size() == 2) {
-            double a = args[0]->type == ToValue::Type::INT ? (double)args[0]->intVal : args[0]->floatVal;
-            double b = args[1]->type == ToValue::Type::INT ? (double)args[1]->intVal : args[1]->floatVal;
-            return a >= b ? args[0] : args[1];
-        }
-        throw ToRuntimeError("max() requires 1 list or 2 arguments");
-    }));
+        };
+    };
+    env->define("min", ToValue::makeBuiltin(extreme(true)));
+    env->define("max", ToValue::makeBuiltin(extreme(false)));
 
     // round(x)
     env->define("round", ToValue::makeBuiltin([](std::vector<ToValuePtr> args) -> ToValuePtr {
@@ -192,4 +159,7 @@ void registerBuiltins(EnvPtr env) {
         file << args[1]->toString();
         return ToValue::makeNone();
     }));
+
+    // Collection constructors: set(), tuple(), deque(), queue(), stack(), heap(), ...
+    registerCollectionBuiltins(env);
 }

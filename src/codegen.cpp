@@ -640,6 +640,16 @@ std::string CodeGenerator::exprToC(ASTNodePtr node) {
             }
             return result;
         }
+        // The native runtime in this file understands ints, floats, strings,
+        // bools, lists and dicts. Rather than emit a program that quietly
+        // computes the wrong thing, say so.
+        case NodeType::TupleLiteral:
+        case NodeType::SetLiteral:
+        case NodeType::SliceExpr:
+            throw ToRuntimeError(
+                "`to build` cannot compile tuples, sets or slices yet — "
+                "run this file with `to run` or `to fast` instead", node->line);
+
         default:
             return "to_none()";
     }

@@ -1,0 +1,212 @@
+~ Test: dict keys, list operations, slicing and equality
+
+~ ---------------------------------------------------------------
+~ Dicts — any hashable key, insertion ordered
+~ ---------------------------------------------------------------
+print "== dict keys =="
+d = {name = "Theo", age = 30}
+print d
+print d["name"]
+print d.name
+print d.length
+
+d["city"] = "Lisbon"
+print d.keys()
+print d.values()
+
+~ Keys do not have to be strings
+scores = {}
+scores[1] = "one"
+scores[2.5] = "two and a half"
+scores[true] = "yes"
+scores[none] = "nothing"
+scores[(1, 2)] = "a tuple"
+print scores.length
+print scores[1]
+print scores[2.5]
+print scores[true]
+print scores[none]
+print scores[(1, 2)]
+print scores.has((1, 2))
+print scores.has((9, 9))
+
+~ Insertion order is preserved
+order = {}
+order["z"] = 1
+order["a"] = 2
+order["m"] = 3
+print order.keys()
+
+~ Reassigning a key keeps its position
+order["z"] = 99
+print order.keys()
+print order["z"]
+
+print "== dict methods =="
+print d.get("name", "unknown")
+print d.get("missing", "fallback")
+print d.remove("city")
+print d.remove("city")
+print d.has("city")
+print d.entries()
+
+base = {a = 1, b = 2}
+extra = {b = 20, c = 3}
+print base.merge(extra)
+print base
+base.update(extra)
+print base
+
+print base.map_values((v): v * 2)
+print base.filter((k, v): v > 5)
+print base.invert()
+
+counts = {x = 1, y = 2}
+total = 0
+through counts as key:
+  total = total + counts[key]
+print "sum over dict: {total}"
+
+copy = base.copy()
+copy["a"] = 999
+print base["a"]
+
+~ ---------------------------------------------------------------
+~ Lists
+~ ---------------------------------------------------------------
+print "== list methods =="
+xs = [5, 3, 1, 4, 1]
+print xs.length
+print xs.contains(4)
+print xs.index_of(1)
+print xs.count(1)
+print xs.first()
+print xs.last()
+
+xs.sort()
+print xs
+xs.sort_desc()
+print xs
+print xs.sorted()
+print xs.reversed()
+print xs.unique()
+
+ys = [1, 2, 3]
+ys.insert(0, 0)
+print ys
+ys.push(4)
+print ys
+print ys.pop()
+print ys.pop(0)
+print ys
+print ys.remove_value(2)
+print ys.remove_value(99)
+print ys
+
+print [1, 2].concat([3, 4])
+zs = [1, 2]
+zs.extend([3])
+print zs
+
+print [1, 2, 3].map((x): x * 10)
+print [1, 2, 3, 4].filter((x): x % 2 == 0)
+print [1, 2, 3, 4].reduce((a, b): a + b, 0)
+print [1, 2, 3].sum()
+print [3, 1, 2].min()
+print [3, 1, 2].max()
+print [1, 2, 3].any((x): x > 2)
+print [1, 2, 3].all((x): x > 2)
+print [1, 2, 3].find((x): x > 1)
+print [[1, 2], [3]].flatten()
+print [1, 2, 3, 4, 5].chunk(2)
+print [1, 2, 3].zip(["a", "b", "c"])
+print [1, 2, 3, 4].take(2)
+print [1, 2, 3, 4].drop(2)
+print ["a", "b"].join("-")
+
+words = ["pear", "fig", "banana"]
+print words.sorted((w): w.length)
+words.sort((w): w.length)
+print words
+
+~ ---------------------------------------------------------------
+~ Slicing
+~ ---------------------------------------------------------------
+print "== slicing =="
+nums = [0, 1, 2, 3, 4, 5]
+print nums[1:3]
+print nums[:2]
+print nums[3:]
+print nums[:]
+print nums[-2:]
+print nums[::2]
+print nums[::-1]
+print nums[1..4]
+
+s = "Hello, World!"
+print s[0:5]
+print s[7:]
+print s[::-1]
+print s[0..5]
+print s.slice(0, 5)
+
+~ ---------------------------------------------------------------
+~ Equality and ordering
+~ ---------------------------------------------------------------
+print "== equality =="
+print [1, 2] == [1, 2]
+print [1, 2] == [2, 1]
+print [1, [2, 3]] == [1, [2, 3]]
+print {a = 1} == {a = 1}
+print {a = 1} == {a = 2}
+print 1 == 1.0
+print [1, 2] + [3]
+print [0] * 3
+
+sorted_mixed = [3, "b", 1, "a"].sorted()
+print sorted_mixed
+
+~ given now matches any value, not just scalars
+pair = [1, 2]
+given pair:
+  if [1, 2]:
+    print "given matched a list"
+  else:
+    print "given missed"
+
+~ ---------------------------------------------------------------
+~ String methods
+~ ---------------------------------------------------------------
+print "== strings =="
+t = "  Hello World  "
+print t.trim()
+print t.trim_start().trim_end()
+print "abc".upper()
+print "ABC".lower()
+print "a,b,c".split(",")
+print "hello".index_of("l")
+print "hello".count("l")
+print "ab".repeat(3)
+print "5".pad_start(3, "0")
+print "5".pad_end(3, "0")
+print "hello".capitalize()
+print "hello".reverse()
+print "42".to_int() + 1
+print "3.5".to_float()
+print "hello".chars()
+print "a\nb".lines()
+print "".is_empty()
+
+~ ---------------------------------------------------------------
+~ Destructuring works on tuples too
+~ ---------------------------------------------------------------
+print "== destructuring =="
+[a, b] = [1, 2]
+print "{a} {b}"
+[c, e] = (3, 4)
+print "{c} {e}"
+[f, ...rest] = [1, 2, 3, 4]
+print f
+print rest
+
+print "Dict and list tests passed!"

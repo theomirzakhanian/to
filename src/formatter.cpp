@@ -200,8 +200,10 @@ void Formatter::formatNode(ASTNodePtr node) {
 
         case NodeType::FunctionDef: {
             std::string header = "to " + node->name + "(";
-            header += formatParams(node->params, node->paramTypes, node->returnTypeHint);
-            header += "):";
+            header += formatParams(node->params, node->paramTypes);
+            header += ")";
+            if (!node->returnTypeHint.empty()) header += " -> " + node->returnTypeHint;
+            header += ":";
             // Decorators
             for (auto& dec : node->decorators) {
                 emitLine("@" + dec);
@@ -222,8 +224,10 @@ void Formatter::formatNode(ASTNodePtr node) {
                 auto& m = node->methods[i];
                 if (i > 0) emitBlank();
                 std::string mHeader = "to " + m.name + "(";
-                mHeader += formatParams(m.params, m.paramTypes, m.returnTypeHint);
-                mHeader += "):";
+                mHeader += formatParams(m.params, m.paramTypes);
+                mHeader += ")";
+                if (!m.returnTypeHint.empty()) mHeader += " -> " + m.returnTypeHint;
+                mHeader += ":";
                 emitLine(mHeader);
                 formatBlock(m.body);
             }
@@ -333,12 +337,23 @@ std::string Formatter::formatExpr(ASTNodePtr node) {
         case NodeType::Identifier:
             return node->name;
 
-        case NodeType::BinaryExpr:
-            return formatExpr(node->left) + " " + node->op + " " + formatExpr(node->right);
+        case NodeType::BinaryExpr: {
+            // Keep the parentheses that matter: without this, formatting
+            // `(1 + 2) * 3` would quietly turn 9 into 7.
+            int prec = precedenceOf(node);
+            std::string left = formatExpr(node->left);
+            std::string right = formatExpr(node->right);
+            if (precedenceOf(node->left) < prec) left = "(" + left + ")";
+            if (precedenceOf(node->right) <= prec) right = "(" + right + ")";
+            return left + " " + node->op + " " + right;
+        }
 
-        case NodeType::UnaryExpr:
-            if (node->op == "not") return "not " + formatExpr(node->operand);
-            return node->op + formatExpr(node->operand);
+        case NodeType::UnaryExpr: {
+            std::string operand = formatExpr(node->operand);
+            if (precedenceOf(node->operand) < 100) operand = "(" + operand + ")";
+            if (node->op == "not") return "not " + operand;
+            return node->op + operand;
+        }
 
         case NodeType::CallExpr: {
             std::string result = formatExpr(node->callee) + "(";
@@ -357,6 +372,15 @@ std::string Formatter::formatExpr(ASTNodePtr node) {
         case NodeType::IndexExpr:
             return formatExpr(node->object) + "[" + formatExpr(node->indexExpr) + "]";
 
+        case NodeType::SliceExpr: {
+            std::string result = formatExpr(node->object) + "[";
+            if (node->rangeStart) result += formatExpr(node->rangeStart);
+            result += ":";
+            if (node->rangeEnd) result += formatExpr(node->rangeEnd);
+            if (node->indexExpr) result += ":" + formatExpr(node->indexExpr);
+            return result + "]";
+        }
+
         case NodeType::ListLiteral: {
             std::string result = "[";
             for (size_t i = 0; i < node->elements.size(); i++) {
@@ -366,12 +390,33 @@ std::string Formatter::formatExpr(ASTNodePtr node) {
             return result + "]";
         }
 
+        case NodeType::TupleLiteral: {
+            if (node->elements.size() == 1) return "(" + formatExpr(node->elements[0]) + ",)";
+            std::string result = "(";
+            for (size_t i = 0; i < node->elements.size(); i++) {
+                if (i > 0) result += ", ";
+                result += formatExpr(node->elements[i]);
+            }
+            return result + ")";
+        }
+
+        case NodeType::SetLiteral: {
+            std::string result = "{";
+            for (size_t i = 0; i < node->elements.size(); i++) {
+                if (i > 0) result += ", ";
+                result += formatExpr(node->elements[i]);
+            }
+            return result + "}";
+        }
+
         case NodeType::DictLiteral: {
             if (node->entries.empty()) return "{}";
             std::string result = "{";
             for (size_t i = 0; i < node->entries.size(); i++) {
                 if (i > 0) result += ", ";
-                result += node->entries[i].key + " = " + formatExpr(node->entries[i].value);
+                result += (node->entries[i].keyExpr ? formatExpr(node->entries[i].keyExpr)
+                                                    : node->entries[i].key);
+                result += " = " + formatExpr(node->entries[i].value);
             }
             return result + "}";
         }
@@ -411,9 +456,25 @@ std::string Formatter::formatExpr(ASTNodePtr node) {
     }
 }
 
+// Binding strength of an expression, used to decide when a subexpression
+// needs parentheses. Anything that is not an operator binds tightest.
+int Formatter::precedenceOf(const ASTNodePtr& node) {
+    if (!node) return 100;
+    if (node->type == NodeType::PipeExpr) return 1;
+    if (node->type == NodeType::UnaryExpr) return node->op == "not" ? 4 : 100;
+    if (node->type != NodeType::BinaryExpr) return 100;
+    const std::string& op = node->op;
+    if (op == "or") return 2;
+    if (op == "and") return 3;
+    if (op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=") return 5;
+    if (op == "..") return 6;
+    if (op == "+" || op == "-") return 7;
+    if (op == "*" || op == "/" || op == "%") return 8;
+    return 100;
+}
+
 std::string Formatter::formatParams(const std::vector<std::string>& params,
-                                     const std::vector<std::string>& types,
-                                     const std::string& returnType) {
+                                     const std::vector<std::string>& types) {
     std::string result;
     for (size_t i = 0; i < params.size(); i++) {
         if (i > 0) result += ", ";
@@ -421,10 +482,6 @@ std::string Formatter::formatParams(const std::vector<std::string>& params,
         if (i < types.size() && !types[i].empty()) {
             result += ": " + types[i];
         }
-    }
-    if (!returnType.empty()) {
-        result += ") -> " + returnType;
-        return result; // caller adds the closing paren before this
     }
     return result;
 }

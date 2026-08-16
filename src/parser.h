@@ -68,4 +68,5 @@ private:
     // Helpers
     ASTNodePtr parseStringWithInterpolation(const std::string& raw, int line);
     std::vector<ASTNodePtr> parseArgList();
+    DictEntry parseDictEntry();
 };

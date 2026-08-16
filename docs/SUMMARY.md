@@ -10,6 +10,7 @@ _Start here. Go in order. By the end, you can write real programs._
 * [Your First Program](getting-started/first-program.md)
 * [CLI Reference](getting-started/cli.md)
 * [Variables & Types](guide/variables.md)
+* [Collections](guide/collections.md)
 * [Functions](guide/functions.md)
 * [Control Flow](guide/control-flow.md)
 * [Loops](guide/loops.md)

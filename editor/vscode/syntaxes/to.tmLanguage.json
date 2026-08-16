@@ -114,7 +114,7 @@
         },
         {
           "name": "support.function.builtin.to",
-          "match": "\\b(print)\\b"
+          "match": "\\b(print|len|type|str|int|float|abs|min|max|round|input|range|list|dict|set|tuple|deque|queue|stack|heap|max_heap|read_file|write_file)\\b"
         }
       ]
     },

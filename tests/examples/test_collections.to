@@ -1,0 +1,188 @@
+~ Test: tuples, sets, deques, queues, stacks and heaps
+
+~ ---------------------------------------------------------------
+~ Tuples — ordered, fixed, hashable
+~ ---------------------------------------------------------------
+print "== tuples =="
+point = (3, 4)
+print point
+print point[0]
+print point[-1]
+print point.length
+print point.contains(4)
+print point.index_of(4)
+
+single = (7,)
+print single
+print single.length
+
+empty = ()
+print empty.length
+
+pair = (1, 2)
+print pair == (1, 2)
+print pair == (2, 1)
+print pair < (1, 3)
+print pair + (5, 6)
+print point.to_list()
+
+nested = ((1, 2), (3, 4))
+print nested[1][0]
+
+~ Tuples are immutable
+try:
+  point.add(5)
+catch err:
+  print "immutable: caught"
+
+~ ---------------------------------------------------------------
+~ Sets — unique members, insertion ordered
+~ ---------------------------------------------------------------
+print "== sets =="
+s = {3, 1, 2, 3, 1}
+print s
+print s.length
+print s.has(2)
+print s.has(99)
+
+s.add(10)
+print s.length
+s.add(10)
+print s.length
+print s.remove(10)
+print s.remove(10)
+
+a = {1, 2, 3}
+b = {3, 4, 5}
+print a.union(b)
+print a.intersect(b)
+print a.difference(b)
+print a.symmetric_difference(b)
+print a.is_subset({1, 2, 3, 4})
+print a.is_superset({1, 2})
+print a.is_disjoint({9})
+print a + b
+print a - b
+print {1, 2} == {2, 1}
+
+print set().length
+print set([1, 1, 2]).length
+
+~ Sets of tuples work because tuples are hashable
+coords = {(0, 0), (1, 1), (0, 0)}
+print coords.length
+print coords.has((1, 1))
+
+total = 0
+through a as item:
+  total = total + item
+print "sum through set: {total}"
+
+~ ---------------------------------------------------------------
+~ Deques — fast at both ends
+~ ---------------------------------------------------------------
+print "== deques =="
+d = deque([2, 3])
+d.push_front(1)
+d.push(4)
+print d
+print d.pop_front()
+print d.pop()
+print d
+print d.length
+d.push(9)
+d.rotate(1)
+print d
+d.reverse()
+print d
+print d[0]
+
+~ ---------------------------------------------------------------
+~ Queues — first in, first out
+~ ---------------------------------------------------------------
+print "== queues =="
+q = queue()
+q.push("a")
+q.push("b")
+q.push("c")
+print q
+print q.pop()
+print q.peek()
+print q.length
+print q.is_empty()
+
+~ ---------------------------------------------------------------
+~ Stacks — last in, first out
+~ ---------------------------------------------------------------
+print "== stacks =="
+st = stack([1, 2])
+st.push(3)
+print st
+print st.pop()
+print st.peek()
+print st.length
+
+~ Balanced-bracket check, the classic use
+to balanced(text):
+  pending = stack()
+  through text as ch:
+    if ch == "(":
+      pending.push(ch)
+    if ch == ")":
+      if pending.is_empty():
+        return false
+      pending.pop()
+  return pending.is_empty()
+
+print balanced("(())")
+print balanced("(()")
+
+~ ---------------------------------------------------------------
+~ Heaps — smallest (or largest) out first
+~ ---------------------------------------------------------------
+print "== heaps =="
+h = heap([5, 1, 3])
+h.push(0)
+print h.peek()
+print h.pop()
+print h.pop()
+print h.length
+print h
+
+mh = max_heap([5, 1, 3])
+print mh.pop()
+print mh.is_max()
+
+~ Heap sort
+to heap_sort(items):
+  h = heap(items)
+  out = []
+  while h.length > 0:
+    out.add(h.pop())
+  return out
+
+print heap_sort([4, 2, 8, 1, 9])
+
+~ ---------------------------------------------------------------
+~ Conversions between every collection
+~ ---------------------------------------------------------------
+print "== conversions =="
+base = [3, 1, 2, 1]
+print base.to_set().length
+print base.to_tuple()
+print base.to_deque()
+print base.to_stack()
+print base.to_queue().to_list()
+print {5, 6}.to_list()
+tup = (1, 2)
+print tup.to_set().length
+print len({1, 2, 3})
+print len(tup)
+print type({1})
+print type((1, 2))
+print type(deque())
+print type(queue())
+print type(stack())
+print type(heap())
+
+print "Collection tests passed!"

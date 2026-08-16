@@ -20,7 +20,7 @@ private:
     void formatNode(ASTNodePtr node);
     void formatBlock(const std::vector<ASTNodePtr>& stmts);
     std::string formatExpr(ASTNodePtr node);
+    static int precedenceOf(const ASTNodePtr& node);
     std::string formatParams(const std::vector<std::string>& params,
-                              const std::vector<std::string>& types,
-                              const std::string& returnType);
+                             const std::vector<std::string>& types);
 };

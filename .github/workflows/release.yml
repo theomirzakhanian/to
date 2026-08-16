@@ -95,6 +95,8 @@ jobs:
             ../src/parser.cpp \
             ../src/interpreter.cpp \
             ../src/environment.cpp \
+            ../src/value.cpp \
+            ../src/methods.cpp \
             ../src/error.cpp \
             ../src/builtins.cpp \
             ../src/http.cpp \

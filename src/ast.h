@@ -12,10 +12,10 @@ using ASTNodePtr = std::shared_ptr<ASTNode>;
 enum class NodeType {
     // Literals
     IntegerLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
-    ListLiteral, DictLiteral, RangeLiteral,
+    ListLiteral, DictLiteral, RangeLiteral, TupleLiteral, SetLiteral,
 
     // Expressions
-    Identifier, BinaryExpr, UnaryExpr, CallExpr, IndexExpr,
+    Identifier, BinaryExpr, UnaryExpr, CallExpr, IndexExpr, SliceExpr,
     MemberAccess, StringInterpolation, LambdaExpr, AsyncExpr, AwaitExpr, PipeExpr,
 
     // Statements
@@ -32,10 +32,13 @@ enum class NodeType {
     Program,
 };
 
-// Dictionary entry for dict literals
+// Dictionary entry for dict literals.
+// `key` holds the written name for the common `{name = value}` form;
+// `keyExpr` is set instead when the key is a literal of another type.
 struct DictEntry {
     std::string key;
     ASTNodePtr value;
+    ASTNodePtr keyExpr;
 };
 
 // Given branch
@@ -95,6 +98,7 @@ struct ASTNode {
 
     // For binary/unary expressions
     std::string op;
+    int8_t binOpId = -1; // cached BinOp tag, filled in on first evaluation
     ASTNodePtr left;
     ASTNodePtr right;
     ASTNodePtr operand; // unary

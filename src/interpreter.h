@@ -22,6 +22,12 @@ public:
     EnvPtr getGlobalEnv() { return globalEnv; }
     ToValuePtr callFunction(ToValuePtr callee, const std::vector<ToValuePtr>& args, int line);
 
+    // Calls a user-defined method on an instance. Sets `found` to false and
+    // returns none when the class has no method by that name. Used by
+    // operator overloading and by the VM's method dispatch.
+    ToValuePtr callInstanceMethod(const ToValuePtr& obj, const std::string& name,
+                                  const std::vector<ToValuePtr>& args, int line, bool* found);
+
     // Generator support
     ToValuePtr createGenerator(std::shared_ptr<ToFunction> func, const std::vector<ToValuePtr>& args);
     ToValuePtr nextGeneratorValue(ToValuePtr gen);
@@ -70,10 +76,7 @@ private:
     ToValuePtr evalDictLiteral(ASTNodePtr node, EnvPtr env);
     ToValuePtr evalRangeLiteral(ASTNodePtr node, EnvPtr env);
 
-    // Member method handling
-    ToValuePtr callListMethod(ToValuePtr list, const std::string& method, const std::vector<ToValuePtr>& args);
-    ToValuePtr callStringMethod(ToValuePtr str, const std::string& method, const std::vector<ToValuePtr>& args);
-    ToValuePtr callDictMethod(ToValuePtr dict, const std::string& method, const std::vector<ToValuePtr>& args);
+    // Built-in methods live in methods.cpp, shared with the bytecode VM.
 
     // Module registration
     void registerWebModule(EnvPtr env, Interpreter* interp);

@@ -36,6 +36,61 @@ jobs:
           echo "Results: $PASS passed, $FAIL failed"
           [ "$FAIL" -eq 0 ] || exit 1
 
+      - name: Run tests under the bytecode VM
+        run: |
+          PASS=0; FAIL=0
+          for f in tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*|*hello*|*ffi_test*) continue;; esac
+            if ./build/to fast "$f" > /dev/null 2>&1; then
+              PASS=$((PASS+1))
+            else
+              echo "FAIL: $f"
+              FAIL=$((FAIL+1))
+            fi
+          done
+          echo "Results: $PASS passed, $FAIL failed"
+          [ "$FAIL" -eq 0 ] || exit 1
+
+      - name: Both engines must agree
+        run: |
+          # `to run` and `to fast` are two implementations of one language.
+          # Exit codes alone hide disagreements, so compare the actual output.
+          DIFF=0
+          for f in tests/examples/*.to; do
+            case "$f" in
+              *helpers*|*web_server*|*hello*|*ffi_test*) continue;;
+              # Excluded: these print timings or a process id, which differ per run.
+              *bench*|*test_process*|*test_stdlib*|*test_decorators*) continue;;
+            esac
+            if ! diff -u <(./build/to run "$f" 2>&1) <(./build/to fast "$f" 2>&1) > /tmp/enginediff; then
+              echo "ENGINES DISAGREE: $f"
+              head -20 /tmp/enginediff
+              DIFF=$((DIFF+1))
+            fi
+          done
+          [ "$DIFF" -eq 0 ] || exit 1
+          echo "Engines agree on every example"
+
+      - name: Formatter round-trips
+        run: |
+          # Formatting must not change what a program does, and must be stable.
+          for f in tests/examples/*.to; do
+            case "$f" in *helpers*|*web_server*|*hello*|*ffi_test*) continue;; esac
+            cp "$f" /tmp/fmt-check.to
+            ./build/to fmt /tmp/fmt-check.to > /dev/null
+            cp /tmp/fmt-check.to /tmp/fmt-once.to
+            ./build/to fmt /tmp/fmt-check.to > /dev/null
+            if ! diff -q /tmp/fmt-once.to /tmp/fmt-check.to > /dev/null; then
+              echo "FORMATTER NOT STABLE: $f"
+              exit 1
+            fi
+            if ! ./build/to check /tmp/fmt-check.to > /dev/null 2>&1; then
+              echo "FORMATTER BROKE PARSING: $f"
+              exit 1
+            fi
+          done
+          echo "Formatter OK"
+
       - name: Test CLI commands
         run: |
           ./build/to version

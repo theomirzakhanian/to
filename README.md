@@ -114,7 +114,8 @@ x = 5
 x = "hello"           ~ dynamic typing — totally fine
 ```
 
-Types: `int`, `float`, `string`, `bool`, `none`, `list`, `dict`
+Types: `int`, `float`, `string`, `bool`, `none`, `list`, `tuple`, `set`,
+`dict`, `deque`, `queue`, `stack`, `heap`
 
 </details>
 
@@ -622,7 +623,14 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 | Strings | `"Hello, {name}!"` or `'single quotes'` |
 | Comments | `~ line` / `~' block '~` |
 | Ranges | `0..10` |
-| Slicing | `list[1..4]` / `str[0..5]` |
+| Slicing | `list[1:4]` / `str[0:5]` / `list[::-1]` |
+| Tuples | `(1, 2)` — fixed, and usable as a dict key |
+| Sets | `{1, 2, 3}` — unique values, `union`/`intersect`/`difference` |
+| Dict keys | any hashable value: `d[42]`, `d[(1, 2)]` |
+| Deque | `deque()` — `push_front` / `push` / `pop_front` / `pop` |
+| Queue | `queue()` — first in, first out |
+| Stack | `stack()` — last in, first out |
+| Heap | `heap()` / `max_heap()` — smallest (or largest) out first |
 | Errors | `try: ... catch e: ... finally: ...` |
 | Imports | `use math` / `use greet from "file.to"` |
 

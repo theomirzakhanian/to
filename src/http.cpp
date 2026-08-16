@@ -141,7 +141,7 @@ HttpResponse HttpResponse::fromValue(ToValuePtr val) {
     }
 
     if (val->type == ToValue::Type::DICT) {
-        for (auto& [k, v] : val->dictVal) {
+        for (auto& [k, v, kv_] : val->dictVal) {
             if (k == "status" && v->type == ToValue::Type::INT) {
                 resp.status = (int)v->intVal;
             } else if (k == "body" && v->type == ToValue::Type::STRING) {
@@ -153,7 +153,7 @@ HttpResponse HttpResponse::fromValue(ToValuePtr val) {
                 // Simple JSON serializer
                 resp.body = "{";
                 bool first = true;
-                for (auto& [jk, jv] : v->dictVal) {
+                for (auto& [jk, jv, jkv_] : v->dictVal) {
                     if (!first) resp.body += ", ";
                     resp.body += "\"" + jk + "\": ";
                     if (jv->type == ToValue::Type::STRING) {
@@ -175,7 +175,7 @@ HttpResponse HttpResponse::fromValue(ToValuePtr val) {
                     } else if (item->type == ToValue::Type::DICT) {
                         resp.body += "{";
                         bool first = true;
-                        for (auto& [jk, jv] : item->dictVal) {
+                        for (auto& [jk, jv, jkv_] : item->dictVal) {
                             if (!first) resp.body += ", ";
                             resp.body += "\"" + jk + "\": ";
                             if (jv->type == ToValue::Type::STRING) resp.body += "\"" + jv->strVal + "\"";
@@ -189,7 +189,7 @@ HttpResponse HttpResponse::fromValue(ToValuePtr val) {
                 }
                 resp.body += "]";
             } else if (k == "headers" && v->type == ToValue::Type::DICT) {
-                for (auto& [hk, hv] : v->dictVal) {
+                for (auto& [hk, hv, hkv_] : v->dictVal) {
                     resp.headers[hk] = hv->toString();
                 }
             } else if (k == "type" && v->type == ToValue::Type::STRING) {
@@ -363,7 +363,7 @@ void HttpServer::serveRouted(int port) {
     auto routeHandler = [this](ToValuePtr reqVal) -> ToValuePtr {
         // Get method and path from request
         std::string method, path;
-        for (auto& [k, v] : reqVal->dictVal) {
+        for (auto& [k, v, kv_] : reqVal->dictVal) {
             if (k == "method") method = v->strVal;
             if (k == "path") path = v->strVal;
         }
@@ -414,18 +414,26 @@ std::string jsonStringify(ToValuePtr val) {
         }
         case ToValue::Type::BOOL: return val->boolVal ? "true" : "false";
         case ToValue::Type::NONE: return "null";
-        case ToValue::Type::LIST: {
+        // Every ordered collection serialises as a JSON array.
+        case ToValue::Type::LIST:
+        case ToValue::Type::TUPLE:
+        case ToValue::Type::SET:
+        case ToValue::Type::DEQUE:
+        case ToValue::Type::QUEUE:
+        case ToValue::Type::STACK:
+        case ToValue::Type::HEAP: {
             std::string result = "[";
-            for (size_t i = 0; i < val->listVal.size(); i++) {
+            auto items = val->elements();
+            for (size_t i = 0; i < items.size(); i++) {
                 if (i > 0) result += ", ";
-                result += jsonStringify(val->listVal[i]);
+                result += jsonStringify(items[i]);
             }
             return result + "]";
         }
         case ToValue::Type::DICT: {
             std::string result = "{";
             bool first = true;
-            for (auto& [k, v] : val->dictVal) {
+            for (auto& [k, v, kv_] : val->dictVal) {
                 if (!first) result += ", ";
                 result += "\"" + k + "\": " + jsonStringify(v);
                 first = false;

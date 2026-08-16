@@ -1,305 +1,176 @@
+// ============================================================
+// vm.cpp — the bytecode compiler and virtual machine (`to fast`)
+// ------------------------------------------------------------
+// Design rule: the VM never reimplements a language semantic. Every
+// operator goes through applyBinaryOp, every method through
+// callBuiltinMethod, every index through indexGet — the same functions
+// the tree-walking interpreter uses. Constructs that are declarative or
+// rare (classes, try/catch, imports, pattern matching, generators,
+// decorators, async) are handed straight to the interpreter with
+// EXEC_AST, so `to fast` runs the whole language rather than a subset
+// of it that silently drops the rest.
+// ============================================================
 #include "vm.h"
 #include "interpreter.h"
+#include "methods.h"
 #include "builtins.h"
 #include "error.h"
-#include "ast.h"
 #include <iostream>
+#include <cstdio>
 
 // ========================
-// Chunk implementation
+// Chunk
 // ========================
 
 size_t Chunk::emit(OpCode op, int line) {
-    size_t offset = code.size();
-    code.push_back(static_cast<uint8_t>(op));
+    code.push_back((uint8_t)op);
     lines.push_back(line);
-    return offset;
+    return code.size() - 1;
 }
 
 size_t Chunk::emitWithArg(OpCode op, uint16_t arg, int line) {
-    size_t offset = code.size();
-    code.push_back(static_cast<uint8_t>(op));
-    code.push_back((arg >> 8) & 0xFF);
-    code.push_back(arg & 0xFF);
+    size_t pos = emit(op, line);
+    code.push_back((uint8_t)(arg >> 8));
     lines.push_back(line);
+    code.push_back((uint8_t)(arg & 0xff));
     lines.push_back(line);
-    lines.push_back(line);
-    return offset;
+    return pos;
 }
 
 size_t Chunk::emitJump(OpCode op, int line) {
-    size_t offset = code.size();
-    code.push_back(static_cast<uint8_t>(op));
-    code.push_back(0xFF); // placeholder
-    code.push_back(0xFF);
-    lines.push_back(line);
-    lines.push_back(line);
-    lines.push_back(line);
-    return offset;
+    emitWithArg(op, 0xffff, line);
+    return code.size() - 2;  // offset of the placeholder
 }
 
 void Chunk::patchJump(size_t offset) {
-    size_t jump = code.size() - offset - 3;
-    if (jump > 0xFFFF) {
-        throw ToRuntimeError("Jump too large");
-    }
-    code[offset + 1] = (jump >> 8) & 0xFF;
-    code[offset + 2] = jump & 0xFF;
+    patchJumpTo(offset, code.size());
+}
+
+void Chunk::patchJumpTo(size_t offset, size_t target) {
+    // Jump operands are absolute byte offsets — simpler to reason about than
+    // relative deltas, and a chunk never exceeds 64K instructions in practice.
+    if (target > 0xffff) throw ToRuntimeError("Program too large for the bytecode VM");
+    code[offset] = (uint8_t)(target >> 8);
+    code[offset + 1] = (uint8_t)(target & 0xff);
 }
 
 void Chunk::emitLoop(size_t loopStart, int line) {
-    code.push_back(static_cast<uint8_t>(OpCode::LOOP));
-    size_t offset = code.size() - loopStart + 2;
-    code.push_back((offset >> 8) & 0xFF);
-    code.push_back(offset & 0xFF);
-    lines.push_back(line);
-    lines.push_back(line);
-    lines.push_back(line);
+    emitWithArg(OpCode::LOOP, (uint16_t)loopStart, line);
 }
 
 uint16_t Chunk::addConstant(ToValuePtr val) {
-    constants.push_back(val);
+    constants.push_back(std::move(val));
     return (uint16_t)(constants.size() - 1);
 }
 
 uint16_t Chunk::addName(const std::string& name) {
-    for (size_t i = 0; i < names.size(); i++) {
+    for (size_t i = 0; i < names.size(); i++)
         if (names[i] == name) return (uint16_t)i;
-    }
     names.push_back(name);
     return (uint16_t)(names.size() - 1);
 }
 
-void Chunk::disassemble(const std::string& name) const {
-    std::cout << "== " << name << " ==\n";
-    size_t offset = 0;
-    while (offset < code.size()) {
-        auto op = static_cast<OpCode>(code[offset]);
-        int line = offset < lines.size() ? lines[offset] : 0;
-        printf("%04zu  L%d  ", offset, line);
-
-        switch (op) {
-            case OpCode::CONST: {
-                uint16_t idx = (code[offset+1] << 8) | code[offset+2];
-                std::cout << "CONST " << idx << " (" << constants[idx]->toString() << ")\n";
-                offset += 3; break;
-            }
-            case OpCode::LOAD: {
-                uint16_t idx = (code[offset+1] << 8) | code[offset+2];
-                std::cout << "LOAD " << names[idx] << "\n";
-                offset += 3; break;
-            }
-            case OpCode::STORE: {
-                uint16_t idx = (code[offset+1] << 8) | code[offset+2];
-                std::cout << "STORE " << names[idx] << "\n";
-                offset += 3; break;
-            }
-            case OpCode::ADD: std::cout << "ADD\n"; offset++; break;
-            case OpCode::SUB: std::cout << "SUB\n"; offset++; break;
-            case OpCode::MUL: std::cout << "MUL\n"; offset++; break;
-            case OpCode::DIV: std::cout << "DIV\n"; offset++; break;
-            case OpCode::MOD: std::cout << "MOD\n"; offset++; break;
-            case OpCode::NEG: std::cout << "NEG\n"; offset++; break;
-            case OpCode::EQ: std::cout << "EQ\n"; offset++; break;
-            case OpCode::NEQ: std::cout << "NEQ\n"; offset++; break;
-            case OpCode::LT: std::cout << "LT\n"; offset++; break;
-            case OpCode::LTE: std::cout << "LTE\n"; offset++; break;
-            case OpCode::GT: std::cout << "GT\n"; offset++; break;
-            case OpCode::GTE: std::cout << "GTE\n"; offset++; break;
-            case OpCode::NOT: std::cout << "NOT\n"; offset++; break;
-            case OpCode::POP: std::cout << "POP\n"; offset++; break;
-            case OpCode::PRINT: std::cout << "PRINT\n"; offset++; break;
-            case OpCode::NONE: std::cout << "NONE\n"; offset++; break;
-            case OpCode::TRUE_: std::cout << "TRUE\n"; offset++; break;
-            case OpCode::FALSE_: std::cout << "FALSE\n"; offset++; break;
-            case OpCode::RETURN: std::cout << "RETURN\n"; offset++; break;
-            case OpCode::HALT: std::cout << "HALT\n"; offset++; break;
-            case OpCode::JUMP: {
-                uint16_t j = (code[offset+1] << 8) | code[offset+2];
-                printf("JUMP +%d -> %zu\n", j, offset + 3 + j);
-                offset += 3; break;
-            }
-            case OpCode::JUMP_IF_FALSE: {
-                uint16_t j = (code[offset+1] << 8) | code[offset+2];
-                printf("JUMP_IF_FALSE +%d -> %zu\n", j, offset + 3 + j);
-                offset += 3; break;
-            }
-            case OpCode::JUMP_IF_TRUE: {
-                uint16_t j = (code[offset+1] << 8) | code[offset+2];
-                printf("JUMP_IF_TRUE +%d -> %zu\n", j, offset + 3 + j);
-                offset += 3; break;
-            }
-            case OpCode::LOOP: {
-                uint16_t j = (code[offset+1] << 8) | code[offset+2];
-                printf("LOOP -%d -> %zu\n", j, offset + 3 - j);
-                offset += 3; break;
-            }
-            case OpCode::CALL: {
-                uint16_t argc = (code[offset+1] << 8) | code[offset+2];
-                printf("CALL %d\n", argc);
-                offset += 3; break;
-            }
-            case OpCode::MAKE_LIST: {
-                uint16_t count = (code[offset+1] << 8) | code[offset+2];
-                printf("MAKE_LIST %d\n", count);
-                offset += 3; break;
-            }
-            case OpCode::MAKE_DICT: {
-                uint16_t count = (code[offset+1] << 8) | code[offset+2];
-                printf("MAKE_DICT %d\n", count);
-                offset += 3; break;
-            }
-            case OpCode::GET_MEMBER: {
-                uint16_t idx = (code[offset+1] << 8) | code[offset+2];
-                std::cout << "GET_MEMBER " << names[idx] << "\n";
-                offset += 3; break;
-            }
-            case OpCode::SET_MEMBER: {
-                uint16_t idx = (code[offset+1] << 8) | code[offset+2];
-                std::cout << "SET_MEMBER " << names[idx] << "\n";
-                offset += 3; break;
-            }
-            case OpCode::INDEX_GET: std::cout << "INDEX_GET\n"; offset++; break;
-            case OpCode::INDEX_SET: std::cout << "INDEX_SET\n"; offset++; break;
-            case OpCode::MAKE_RANGE: std::cout << "MAKE_RANGE\n"; offset++; break;
-            case OpCode::CONCAT: std::cout << "CONCAT\n"; offset++; break;
-            default:
-                printf("UNKNOWN(%d)\n", (int)op);
-                offset++;
-        }
-    }
+uint16_t Chunk::addAst(ASTNodePtr node) {
+    asts.push_back(AstSlot{std::move(node), -1, -1});
+    return (uint16_t)(asts.size() - 1);
 }
 
 // ========================
-// Compiler implementation
+// Compiler
 // ========================
 
 Compiler::Compiler() : currentChunk(&mainChunk) {}
 
-Chunk Compiler::compile(ASTNodePtr program, bool isTopLevel /*= true*/) {
+Chunk Compiler::compile(ASTNodePtr program, bool isTopLevel,
+                        const std::string& fnName, size_t arity) {
     mainChunk = Chunk();
     currentChunk = &mainChunk;
+    selfName = fnName;
+    selfArity = arity;
+    loopStack.clear();
 
     if (program->type == NodeType::Program) {
         compileBlock(program->statements);
+    } else {
+        compileStatement(program);
     }
+
     if (isTopLevel) {
         currentChunk->emit(OpCode::HALT, 0);
     } else {
-        // Functions need an implicit return none
         currentChunk->emit(OpCode::NONE, 0);
         currentChunk->emit(OpCode::RETURN, 0);
     }
-    return mainChunk;
+    return std::move(mainChunk);
 }
 
 void Compiler::compileBlock(const std::vector<ASTNodePtr>& stmts) {
-    for (auto& stmt : stmts) {
-        compileStatement(stmt);
-    }
+    for (auto& stmt : stmts) compileStatement(stmt);
+}
+
+void Compiler::deferToInterpreter(ASTNodePtr node, bool isStatement) {
+    uint16_t slot = currentChunk->addAst(node);
+    if (isStatement && !loopStack.empty()) loopStack.back().astSlots.push_back(slot);
+    currentChunk->emitWithArg(isStatement ? OpCode::EXEC_AST : OpCode::EVAL_AST, slot, node->line);
+}
+
+bool Compiler::isTailCall(ASTNodePtr node) const {
+    return !selfName.empty() && node && node->type == NodeType::CallExpr &&
+           node->callee && node->callee->type == NodeType::Identifier &&
+           node->callee->name == selfName && node->arguments.size() == selfArity;
 }
 
 void Compiler::compileStatement(ASTNodePtr node) {
+    if (!node) return;
     switch (node->type) {
-        case NodeType::PrintStmt: {
-            compileExpression(node->value);
-            currentChunk->emit(OpCode::PRINT, node->line);
-            break;
-        }
-        case NodeType::ExpressionStmt: {
+        case NodeType::ExpressionStmt:
             compileExpression(node->value);
             currentChunk->emit(OpCode::POP, node->line);
             break;
-        }
-        case NodeType::Assignment: {
-            compileExpression(node->value);
 
-            if (node->target->type == NodeType::Identifier) {
-                if (node->assignOp != "=") {
-                    // Compound assignment: load old value, compute, store
-                    uint16_t nameIdx = currentChunk->addName(node->target->name);
-                    // We already compiled the RHS. Now load old value and compute
-                    // Actually — recompile: push old, push new, op, store
-                    // Reset: pop the value we compiled
-                    currentChunk->emit(OpCode::POP, node->line);
-                    // Load old
-                    currentChunk->emitWithArg(OpCode::LOAD, nameIdx, node->line);
-                    // Compile new value again
-                    compileExpression(node->value);
-                    // Apply op
-                    if (node->assignOp == "+=") currentChunk->emit(OpCode::ADD, node->line);
-                    else if (node->assignOp == "-=") currentChunk->emit(OpCode::SUB, node->line);
-                    else if (node->assignOp == "*=") currentChunk->emit(OpCode::MUL, node->line);
-                    else if (node->assignOp == "/=") currentChunk->emit(OpCode::DIV, node->line);
-                    currentChunk->emitWithArg(OpCode::STORE, nameIdx, node->line);
-                } else {
-                    uint16_t nameIdx = currentChunk->addName(node->target->name);
-                    currentChunk->emitWithArg(OpCode::STORE, nameIdx, node->line);
-                }
-            } else if (node->target->type == NodeType::MemberAccess) {
-                // obj.member = val  (val already on stack)
-                compileExpression(node->target->object);
-                // Stack: [val, obj]  — but we need obj first. Rearrange:
-                // Actually let's recompile in correct order
-                currentChunk->emit(OpCode::POP, node->line); // pop val
-                compileExpression(node->target->object);
-                compileExpression(node->value); // push val again
-                uint16_t memberIdx = currentChunk->addName(node->target->member);
-                currentChunk->emitWithArg(OpCode::SET_MEMBER, memberIdx, node->line);
-            } else if (node->target->type == NodeType::IndexExpr) {
-                currentChunk->emit(OpCode::POP, node->line);
-                compileExpression(node->target->object);
-                compileExpression(node->target->indexExpr);
-                compileExpression(node->value);
-                currentChunk->emit(OpCode::INDEX_SET, node->line);
-            }
+        case NodeType::PrintStmt:
+            compileExpression(node->value);
+            currentChunk->emit(OpCode::PRINT, node->line);
             break;
-        }
+
+        case NodeType::Assignment:
+            compileAssignment(node);
+            break;
+
         case NodeType::ConstDecl: {
             compileExpression(node->value);
-            uint16_t nameIdx = currentChunk->addName(node->name);
-            currentChunk->emitWithArg(OpCode::STORE_CONST, nameIdx, node->line);
+            currentChunk->emitWithArg(OpCode::STORE_CONST, currentChunk->addName(node->name), node->line);
             break;
         }
+
         case NodeType::IfBlock: {
+            // Each branch jumps to a single shared exit once it has run.
+            std::vector<size_t> exitJumps;
+
             compileExpression(node->condition);
-            size_t thenJump = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
+            size_t nextBranch = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
             compileBlock(node->body);
+            exitJumps.push_back(currentChunk->emitJump(OpCode::JUMP, node->line));
 
-            if (!node->orBranches.empty() || !node->elseBody.empty()) {
-                size_t endJump = currentChunk->emitJump(OpCode::JUMP, node->line);
-                currentChunk->patchJump(thenJump);
-
-                for (size_t i = 0; i < node->orBranches.size(); i++) {
-                    compileExpression(node->orBranches[i].condition);
-                    size_t orJump = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
-                    compileBlock(node->orBranches[i].body);
-                    // Need to jump to end after each or-branch
-                    // Save this jump to patch later
-                    size_t orEnd = currentChunk->emitJump(OpCode::JUMP, node->line);
-                    currentChunk->patchJump(orJump);
-                    // Patch previous endJump to here? No — chain:
-                    // Actually, we need to collect all end jumps and patch them
-                    // For simplicity, patch orEnd at the very end
-                    currentChunk->patchJump(endJump);
-                    endJump = orEnd;
-                }
-
-                if (!node->elseBody.empty()) {
-                    currentChunk->patchJump(endJump);
-                    compileBlock(node->elseBody);
-                } else {
-                    currentChunk->patchJump(endJump);
-                }
-            } else {
-                currentChunk->patchJump(thenJump);
+            for (auto& branch : node->orBranches) {
+                currentChunk->patchJump(nextBranch);
+                compileExpression(branch.condition);
+                nextBranch = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
+                compileBlock(branch.body);
+                exitJumps.push_back(currentChunk->emitJump(OpCode::JUMP, node->line));
             }
+
+            currentChunk->patchJump(nextBranch);
+            if (!node->elseBody.empty()) compileBlock(node->elseBody);
+            for (size_t j : exitJumps) currentChunk->patchJump(j);
             break;
         }
+
         case NodeType::WhileLoop: {
             LoopInfo loop;
             loop.loopStart = currentChunk->code.size();
-            loopStack.push_back(loop);
+            loop.scopeDepth = scopeDepth;
+            loopStack.push_back(std::move(loop));
 
             compileExpression(node->condition);
             size_t exitJump = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
@@ -307,137 +178,222 @@ void Compiler::compileStatement(ASTNodePtr node) {
             currentChunk->emitLoop(loopStack.back().loopStart, node->line);
             currentChunk->patchJump(exitJump);
 
-            // Patch break jumps
-            for (auto bj : loopStack.back().breakJumps) {
-                currentChunk->patchJump(bj);
+            auto& info = loopStack.back();
+            size_t exitPad = currentChunk->code.size();
+            for (size_t bj : info.breakJumps) currentChunk->patchJumpTo(bj, exitPad);
+            for (size_t cj : info.continueJumps) currentChunk->patchJumpTo(cj, info.loopStart);
+            for (uint16_t slot : info.astSlots) {
+                currentChunk->asts[slot].breakTarget = (int)exitPad;
+                currentChunk->asts[slot].continueTarget = (int)info.loopStart;
             }
             loopStack.pop_back();
             break;
         }
+
         case NodeType::ThroughLoop: {
-            // Compile iterable
             compileExpression(node->iterable);
             currentChunk->emit(OpCode::GET_ITER, node->line);
 
             LoopInfo loop;
             loop.loopStart = currentChunk->code.size();
-            loopStack.push_back(loop);
+            loop.scopeDepth = scopeDepth;
+            loopStack.push_back(std::move(loop));
 
-            // ITER_NEXT pushes value + done flag
-            currentChunk->emit(OpCode::DUP, node->line); // dup iterator
+            currentChunk->emit(OpCode::DUP, node->line);
             currentChunk->emit(OpCode::ITER_NEXT, node->line);
             size_t exitJump = currentChunk->emitJump(OpCode::JUMP_IF_FALSE, node->line);
 
-            // Store loop variable
-            uint16_t varIdx = currentChunk->addName(node->loopVar);
-            currentChunk->emitWithArg(OpCode::STORE, varIdx, node->line);
-
+            // Each pass gets its own scope, so `to adder(): ...` closures made
+            // in the body capture this iteration's loop variable, not the last.
+            currentChunk->emit(OpCode::SCOPE_BEGIN, node->line);
+            scopeDepth++;
+            currentChunk->emitWithArg(OpCode::STORE, currentChunk->addName(node->loopVar), node->line);
             compileBlock(node->body);
-            currentChunk->emitLoop(loopStack.back().loopStart, node->line);
-            currentChunk->patchJump(exitJump);
-            currentChunk->emit(OpCode::POP, node->line); // pop iterator
+            scopeDepth--;
 
-            for (auto bj : loopStack.back().breakJumps) {
-                currentChunk->patchJump(bj);
+            size_t continuePad = currentChunk->code.size();
+            currentChunk->emitWithArg(OpCode::SCOPE_TRUNC, scopeDepth, node->line);
+            currentChunk->emitLoop(loopStack.back().loopStart, node->line);
+
+            // Break and normal exit share a landing pad: the iterator is still
+            // on the stack there and is popped once, by whichever path arrives.
+            currentChunk->patchJump(exitJump);
+            size_t exitPad = currentChunk->code.size();
+            currentChunk->emitWithArg(OpCode::SCOPE_TRUNC, scopeDepth, node->line);
+
+            auto& info = loopStack.back();
+            for (size_t bj : info.breakJumps) currentChunk->patchJumpTo(bj, exitPad);
+            for (size_t cj : info.continueJumps) currentChunk->patchJumpTo(cj, continuePad);
+            for (uint16_t slot : info.astSlots) {
+                currentChunk->asts[slot].breakTarget = (int)exitPad;
+                currentChunk->asts[slot].continueTarget = (int)continuePad;
             }
             loopStack.pop_back();
+            currentChunk->emit(OpCode::POP, node->line);
             break;
         }
+
         case NodeType::ReturnStmt: {
-            if (node->value) {
-                compileExpression(node->value);
-            } else {
-                currentChunk->emit(OpCode::NONE, node->line);
+            if (node->value && isTailCall(node->value)) {
+                for (auto& arg : node->value->arguments) compileExpression(arg);
+                currentChunk->emitWithArg(OpCode::TAIL_CALL,
+                                          (uint16_t)node->value->arguments.size(), node->line);
+                break;
             }
+            if (node->value) compileExpression(node->value);
+            else currentChunk->emit(OpCode::NONE, node->line);
             currentChunk->emit(OpCode::RETURN, node->line);
             break;
         }
-        case NodeType::BreakStmt: {
-            if (!loopStack.empty()) {
-                size_t breakJump = currentChunk->emitJump(OpCode::JUMP, node->line);
-                loopStack.back().breakJumps.push_back(breakJump);
-            }
+
+        case NodeType::BreakStmt:
+            if (loopStack.empty()) throw ToRuntimeError("'break' outside of a loop", node->line);
+            loopStack.back().breakJumps.push_back(currentChunk->emitJump(OpCode::JUMP, node->line));
             break;
-        }
-        case NodeType::ContinueStmt: {
-            if (!loopStack.empty()) {
-                currentChunk->emitLoop(loopStack.back().loopStart, node->line);
-            }
+
+        case NodeType::ContinueStmt:
+            if (loopStack.empty()) throw ToRuntimeError("'continue' outside of a loop", node->line);
+            loopStack.back().continueJumps.push_back(currentChunk->emitJump(OpCode::JUMP, node->line));
             break;
-        }
-        case NodeType::FunctionDef: {
-            // For now, function defs are stored as constants
-            // The VM will use the tree-walker's function infrastructure
-            // Full bytecode functions would need call frames — keep it hybrid for now
-            uint16_t nameIdx = currentChunk->addName(node->name);
-            auto func = std::make_shared<ToFunction>();
-            func->name = node->name;
-            func->params = node->params;
-            func->paramTypes = node->paramTypes;
-            func->returnTypeHint = node->returnTypeHint;
-            func->body = node->body;
-            uint16_t constIdx = currentChunk->addConstant(ToValue::makeFunction(func));
-            currentChunk->emitWithArg(OpCode::CONST, constIdx, node->line);
-            currentChunk->emitWithArg(OpCode::STORE, nameIdx, node->line);
-            break;
-        }
+
         case NodeType::AssertStmt: {
             compileExpression(node->value);
-            // If falsy, throw
-            size_t okJump = currentChunk->emitJump(OpCode::JUMP_IF_TRUE, node->line);
-            // Push error message as constant
-            uint16_t msgIdx = currentChunk->addConstant(
+            uint16_t msg = currentChunk->addConstant(
                 ToValue::makeString("Assertion failed at line " + std::to_string(node->line)));
-            currentChunk->emitWithArg(OpCode::CONST, msgIdx, node->line);
-            currentChunk->emit(OpCode::PRINT, node->line);
-            currentChunk->emit(OpCode::HALT, node->line); // hard stop on assert fail
-            currentChunk->patchJump(okJump);
+            currentChunk->emitWithArg(OpCode::ASSERT, msg, node->line);
             break;
         }
+
         default:
-            // For unsupported statements, skip (the tree-walker handles them)
+            // Classes, try/catch, imports, `given`, enums, shapes,
+            // destructuring, function definitions (which may carry decorators
+            // or a generator body) — the interpreter owns these.
+            deferToInterpreter(node, true);
             break;
     }
 }
 
+void Compiler::compileAssignment(ASTNodePtr node) {
+    auto target = node->target;
+    bool compound = !node->assignOp.empty() && node->assignOp != "=";
+
+    // The right-hand side is compiled exactly once, whatever the target is.
+    auto emitValue = [&]() {
+        if (!compound) {
+            compileExpression(node->value);
+            return;
+        }
+        std::string op = node->assignOp.substr(0, 1);
+        compileExpression(node->value);
+        switch (op[0]) {
+            case '+': currentChunk->emit(OpCode::ADD, node->line); break;
+            case '-': currentChunk->emit(OpCode::SUB, node->line); break;
+            case '*': currentChunk->emit(OpCode::MUL, node->line); break;
+            case '/': currentChunk->emit(OpCode::DIV, node->line); break;
+            default: break;
+        }
+    };
+
+    if (target->type == NodeType::Identifier) {
+        uint16_t name = currentChunk->addName(target->name);
+        if (compound) currentChunk->emitWithArg(OpCode::LOAD, name, node->line);
+        emitValue();
+        currentChunk->emitWithArg(OpCode::STORE, name, node->line);
+        return;
+    }
+
+    if (target->type == NodeType::MemberAccess) {
+        uint16_t member = currentChunk->addName(target->member);
+        compileExpression(target->object);          // [obj]
+        if (compound) {
+            currentChunk->emit(OpCode::DUP, node->line);                         // [obj, obj]
+            currentChunk->emitWithArg(OpCode::GET_MEMBER, member, node->line);   // [obj, old]
+        }
+        emitValue();                                                            // [obj, val]
+        currentChunk->emitWithArg(OpCode::SET_MEMBER, member, node->line);
+        return;
+    }
+
+    if (target->type == NodeType::IndexExpr) {
+        compileExpression(target->object);          // [obj]
+        compileExpression(target->indexExpr);       // [obj, idx]
+        if (compound) {
+            currentChunk->emit(OpCode::DUP2, node->line);       // [obj, idx, obj, idx]
+            currentChunk->emit(OpCode::INDEX_GET, node->line);  // [obj, idx, old]
+        }
+        emitValue();                                // [obj, idx, new]
+        currentChunk->emit(OpCode::INDEX_SET, node->line);
+        return;
+    }
+
+    throw ToRuntimeError("Invalid assignment target", node->line);
+}
+
+void Compiler::compileCall(ASTNodePtr node) {
+    // obj.method(args) is one instruction, not a member read followed by a
+    // call: built-in methods are not first-class values.
+    if (node->callee && node->callee->type == NodeType::MemberAccess) {
+        compileExpression(node->callee->object);
+        for (auto& arg : node->arguments) compileExpression(arg);
+        uint16_t name = currentChunk->addName(node->callee->member);
+        currentChunk->emitWithArg(
+            node->callee->optionalChain ? OpCode::CALL_METHOD_OPT : OpCode::CALL_METHOD,
+            name, node->line);
+        // The argument count rides along in a second operand.
+        currentChunk->code.push_back((uint8_t)node->arguments.size());
+        currentChunk->lines.push_back(node->line);
+        return;
+    }
+
+    compileExpression(node->callee);
+    for (auto& arg : node->arguments) compileExpression(arg);
+    currentChunk->emitWithArg(OpCode::CALL, (uint16_t)node->arguments.size(), node->line);
+}
+
 void Compiler::compileExpression(ASTNodePtr node) {
+    if (!node) {
+        currentChunk->emit(OpCode::NONE, 0);
+        return;
+    }
     switch (node->type) {
-        case NodeType::IntegerLiteral: {
-            uint16_t idx = currentChunk->addConstant(ToValue::makeInt(node->intValue));
-            currentChunk->emitWithArg(OpCode::CONST, idx, node->line);
+        case NodeType::IntegerLiteral:
+            currentChunk->emitWithArg(OpCode::CONST,
+                currentChunk->addConstant(ToValue::makeInt(node->intValue)), node->line);
             break;
-        }
-        case NodeType::FloatLiteral: {
-            uint16_t idx = currentChunk->addConstant(ToValue::makeFloat(node->floatValue));
-            currentChunk->emitWithArg(OpCode::CONST, idx, node->line);
+        case NodeType::FloatLiteral:
+            currentChunk->emitWithArg(OpCode::CONST,
+                currentChunk->addConstant(ToValue::makeFloat(node->floatValue)), node->line);
             break;
-        }
-        case NodeType::StringLiteral: {
-            uint16_t idx = currentChunk->addConstant(ToValue::makeString(node->stringValue));
-            currentChunk->emitWithArg(OpCode::CONST, idx, node->line);
+        case NodeType::StringLiteral:
+            currentChunk->emitWithArg(OpCode::CONST,
+                currentChunk->addConstant(ToValue::makeString(node->stringValue)), node->line);
             break;
-        }
         case NodeType::BoolLiteral:
             currentChunk->emit(node->boolValue ? OpCode::TRUE_ : OpCode::FALSE_, node->line);
             break;
         case NodeType::NoneLiteral:
             currentChunk->emit(OpCode::NONE, node->line);
             break;
-        case NodeType::Identifier: {
-            uint16_t idx = currentChunk->addName(node->name);
-            currentChunk->emitWithArg(OpCode::LOAD, idx, node->line);
+        case NodeType::Identifier:
+            currentChunk->emitWithArg(OpCode::LOAD, currentChunk->addName(node->name), node->line);
             break;
-        }
+
         case NodeType::BinaryExpr: {
-            if (node->op == "..") {
+            // `and` and `or` must not evaluate their right side eagerly.
+            if (node->op == "and" || node->op == "or") {
                 compileExpression(node->left);
+                size_t shortCircuit = currentChunk->emitJump(
+                    node->op == "and" ? OpCode::JUMP_IF_FALSE_KEEP : OpCode::JUMP_IF_TRUE_KEEP,
+                    node->line);
+                currentChunk->emit(OpCode::POP, node->line);
                 compileExpression(node->right);
-                currentChunk->emit(OpCode::MAKE_RANGE, node->line);
+                currentChunk->patchJump(shortCircuit);
                 break;
             }
             compileExpression(node->left);
             compileExpression(node->right);
-            if (node->op == "+") currentChunk->emit(OpCode::ADD, node->line);
+            if (node->op == "..") currentChunk->emit(OpCode::MAKE_RANGE, node->line);
+            else if (node->op == "+") currentChunk->emit(OpCode::ADD, node->line);
             else if (node->op == "-") currentChunk->emit(OpCode::SUB, node->line);
             else if (node->op == "*") currentChunk->emit(OpCode::MUL, node->line);
             else if (node->op == "/") currentChunk->emit(OpCode::DIV, node->line);
@@ -448,557 +404,602 @@ void Compiler::compileExpression(ASTNodePtr node) {
             else if (node->op == "<=") currentChunk->emit(OpCode::LTE, node->line);
             else if (node->op == ">") currentChunk->emit(OpCode::GT, node->line);
             else if (node->op == ">=") currentChunk->emit(OpCode::GTE, node->line);
+            else throw ToRuntimeError("Unknown operator '" + node->op + "'", node->line);
             break;
         }
-        case NodeType::UnaryExpr: {
+
+        case NodeType::UnaryExpr:
             compileExpression(node->operand);
             if (node->op == "-") currentChunk->emit(OpCode::NEG, node->line);
             else if (node->op == "not") currentChunk->emit(OpCode::NOT, node->line);
+            else throw ToRuntimeError("Unknown unary operator '" + node->op + "'", node->line);
             break;
-        }
-        case NodeType::CallExpr: {
-            compileExpression(node->callee);
-            for (auto& arg : node->arguments) {
-                compileExpression(arg);
-            }
-            currentChunk->emitWithArg(OpCode::CALL, (uint16_t)node->arguments.size(), node->line);
+
+        case NodeType::CallExpr:
+            compileCall(node);
             break;
-        }
-        case NodeType::MemberAccess: {
+
+        case NodeType::MemberAccess:
             compileExpression(node->object);
-            uint16_t memberIdx = currentChunk->addName(node->member);
-            if (node->optionalChain) {
-                currentChunk->emitWithArg(OpCode::GET_MEMBER_OPT, memberIdx, node->line);
-            } else {
-                currentChunk->emitWithArg(OpCode::GET_MEMBER, memberIdx, node->line);
-            }
+            currentChunk->emitWithArg(
+                node->optionalChain ? OpCode::GET_MEMBER_OPT : OpCode::GET_MEMBER,
+                currentChunk->addName(node->member), node->line);
             break;
-        }
-        case NodeType::IndexExpr: {
+
+        case NodeType::IndexExpr:
             compileExpression(node->object);
+            // xs[a..b] is a slice, not a lookup by a range value.
+            if (node->indexExpr->type == NodeType::BinaryExpr && node->indexExpr->op == "..") {
+                compileExpression(node->indexExpr->left);
+                compileExpression(node->indexExpr->right);
+                currentChunk->emit(OpCode::NONE, node->line);
+                currentChunk->emit(OpCode::SLICE, node->line);
+                break;
+            }
             compileExpression(node->indexExpr);
             currentChunk->emit(OpCode::INDEX_GET, node->line);
             break;
-        }
-        case NodeType::ListLiteral: {
-            for (auto& elem : node->elements) {
-                compileExpression(elem);
-            }
+
+        case NodeType::SliceExpr:
+            compileExpression(node->object);
+            if (node->rangeStart) compileExpression(node->rangeStart);
+            else currentChunk->emit(OpCode::NONE, node->line);
+            if (node->rangeEnd) compileExpression(node->rangeEnd);
+            else currentChunk->emit(OpCode::NONE, node->line);
+            if (node->indexExpr) compileExpression(node->indexExpr);
+            else currentChunk->emit(OpCode::NONE, node->line);
+            currentChunk->emit(OpCode::SLICE, node->line);
+            break;
+
+        case NodeType::ListLiteral:
+            for (auto& e : node->elements) compileExpression(e);
             currentChunk->emitWithArg(OpCode::MAKE_LIST, (uint16_t)node->elements.size(), node->line);
             break;
-        }
-        case NodeType::DictLiteral: {
+
+        case NodeType::TupleLiteral:
+            for (auto& e : node->elements) compileExpression(e);
+            currentChunk->emitWithArg(OpCode::MAKE_TUPLE, (uint16_t)node->elements.size(), node->line);
+            break;
+
+        case NodeType::SetLiteral:
+            for (auto& e : node->elements) compileExpression(e);
+            currentChunk->emitWithArg(OpCode::MAKE_SET, (uint16_t)node->elements.size(), node->line);
+            break;
+
+        case NodeType::DictLiteral:
             for (auto& entry : node->entries) {
-                uint16_t keyIdx = currentChunk->addConstant(ToValue::makeString(entry.key));
-                currentChunk->emitWithArg(OpCode::CONST, keyIdx, node->line);
+                if (entry.keyExpr) compileExpression(entry.keyExpr);
+                else currentChunk->emitWithArg(OpCode::CONST,
+                        currentChunk->addConstant(ToValue::makeString(entry.key)), node->line);
                 compileExpression(entry.value);
             }
             currentChunk->emitWithArg(OpCode::MAKE_DICT, (uint16_t)node->entries.size(), node->line);
             break;
-        }
-        case NodeType::StringInterpolation: {
-            // Compile each element and concatenate
+
+        case NodeType::StringInterpolation:
+            if (node->elements.empty()) {
+                currentChunk->emitWithArg(OpCode::CONST,
+                    currentChunk->addConstant(ToValue::makeString("")), node->line);
+                break;
+            }
             for (size_t i = 0; i < node->elements.size(); i++) {
                 compileExpression(node->elements[i]);
-                if (i > 0) {
-                    currentChunk->emit(OpCode::CONCAT, node->line);
-                }
+                if (i > 0) currentChunk->emit(OpCode::CONCAT, node->line);
             }
             break;
-        }
+
         default:
-            // Push none for unsupported expressions
-            currentChunk->emit(OpCode::NONE, node->line);
+            // Lambdas, async/await, pipes — evaluated by the interpreter in
+            // this frame's scope, so closures and futures behave identically.
+            deferToInterpreter(node, false);
             break;
     }
 }
 
 // ========================
-// VM implementation
+// VM
 // ========================
 
-VM::VM() : globalEnv(std::make_shared<Environment>()) {
+VM::VM() : stack(STACK_MAX), frames(FRAMES_MAX), globalEnv(std::make_shared<Environment>()) {
     registerBuiltins(globalEnv);
     treeWalker = std::make_shared<Interpreter>("<vm>");
 }
 
-Chunk VM::compileFunction(std::shared_ptr<ToFunction> func) {
-    // Check cache
-    auto it = functionChunks.find(func->name);
-    if (it != functionChunks.end()) return it->second;
-
-    Compiler compiler;
-    auto program = ASTNode::makeProgram(func->body);
-    Chunk chunk = compiler.compile(program, false); // not top-level
-    functionChunks[func->name] = chunk;
-    return chunk;
-}
+VM::~VM() = default;
 
 void VM::push(ToValuePtr val) {
-    if (stackTop >= STACK_MAX) {
-        throw ToRuntimeError("Stack overflow");
-    }
-    stack[stackTop++] = val;
+    if (stackTop >= STACK_MAX) throw ToRuntimeError("Stack overflow");
+    stack[stackTop++] = std::move(val);
 }
 
 ToValuePtr VM::pop() {
-    if (stackTop == 0) {
-        throw ToRuntimeError("Stack underflow");
-    }
-    return stack[--stackTop];
+    if (stackTop == 0) throw ToRuntimeError("Stack underflow");
+    return std::move(stack[--stackTop]);
 }
 
-ToValuePtr VM::peek(int offset) {
-    if (stackTop <= (size_t)offset) {
-        throw ToRuntimeError("Stack underflow on peek");
-    }
+ToValuePtr& VM::peek(int offset) {
+    if (stackTop <= (size_t)offset) throw ToRuntimeError("Stack underflow");
     return stack[stackTop - 1 - offset];
 }
 
-uint16_t VM::readShort(Chunk& chunk, size_t& ip) {
-    uint8_t hi = chunk.code[ip++];
-    uint8_t lo = chunk.code[ip++];
-    return (hi << 8) | lo;
+bool VM::needsInterpreter(const std::shared_ptr<ToFunction>& func) {
+    if (func->isGenerator) return true;
+    if (!func->returnTypeHint.empty()) return true;
+    for (auto& hint : func->paramTypes)
+        if (!hint.empty()) return true;
+    return false;
+}
+
+Chunk* VM::chunkFor(const std::shared_ptr<ToFunction>& func) {
+    if (func->compiledChunk) return static_cast<Chunk*>(func->compiledChunk.get());
+
+    Compiler compiler;
+    auto body = ASTNode::makeProgram(func->body);
+    auto chunk = std::make_shared<Chunk>(
+        compiler.compile(body, false, func->name, func->params.size()));
+    func->compiledChunk = chunk;
+    return chunk.get();
 }
 
 void VM::run(Chunk& chunk) {
-    // Push initial frame
+    stackTop = 0;
     frameCount = 0;
-    frames[0] = {&chunk, 0, 0, globalEnv};
-    frameCount = 1;
+    frames[frameCount++] = CallFrame{&chunk, 0, 0, globalEnv, nullptr, {}};
+    execute();
+}
 
-    CallFrame* curFrame = &frames[0]; // will be reassigned
-restart_frame:
-    curFrame = &frames[frameCount - 1];
+void VM::execute() {
+    while (true) {
+        CallFrame* frame = &frames[frameCount - 1];
+        Chunk* chunk = frame->chunk;
+        auto& code = chunk->code;
 
-    while (curFrame->ip < curFrame->chunk->code.size()) {
-        auto op = static_cast<OpCode>(curFrame->chunk->code[curFrame->ip++]);
+        // Reads the two-byte operand that follows the opcode.
+        auto readArg = [&]() -> uint16_t {
+            uint16_t hi = code[frame->ip++];
+            uint16_t lo = code[frame->ip++];
+            return (uint16_t)((hi << 8) | lo);
+        };
 
-        switch (op) {
-            case OpCode::CONST: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                push(curFrame->chunk->constants[idx]);
-                break;
-            }
-            case OpCode::POP: pop(); break;
-            case OpCode::DUP: push(peek(0)); break;
+        // Unwinds the current frame, leaving `result` where the caller expects it.
+        // Returns false once the outermost frame has returned.
+        auto returnFrom = [&](ToValuePtr result) -> bool {
+            size_t base = frame->stackBase;
+            frameCount--;
+            stackTop = base;
+            if (frameCount == 0) return false;
+            push(std::move(result));
+            return true;
+        };
 
-            case OpCode::LOAD: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                auto val = curFrame->env->get(curFrame->chunk->names[idx]);
-                if (!val) throw ToRuntimeError("Undefined variable '" + curFrame->chunk->names[idx] + "'");
-                push(val);
-                break;
-            }
-            case OpCode::STORE: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                auto val = peek(0);
-                // If storing a function, set its closure to our global env
-                if (val->type == ToValue::Type::FUNCTION && !val->funcVal->closure) {
-                    val->funcVal->closure = globalEnv;
-                }
-                curFrame->env->set(curFrame->chunk->names[idx], val);
-                pop();
-                break;
-            }
-            case OpCode::STORE_CONST: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                curFrame->env->defineConst(curFrame->chunk->names[idx], peek(0));
-                pop();
-                break;
-            }
+        size_t opOffset = frame->ip;
+        OpCode op = (OpCode)code[frame->ip++];
 
-            // Arithmetic
-            case OpCode::ADD: {
-                auto b = pop(); auto a = pop();
-                if (a->type == ToValue::Type::INT && b->type == ToValue::Type::INT)
-                    push(ToValue::makeInt(a->intVal + b->intVal));
-                else if (a->type == ToValue::Type::STRING || b->type == ToValue::Type::STRING)
-                    push(ToValue::makeString(a->toString() + b->toString()));
-                else if (a->type == ToValue::Type::FLOAT || b->type == ToValue::Type::FLOAT) {
-                    double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                    double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                    push(ToValue::makeFloat(av + bv));
-                } else push(ToValue::makeNone());
-                break;
-            }
-            case OpCode::SUB: {
-                auto b = pop(); auto a = pop();
-                if (a->type == ToValue::Type::INT && b->type == ToValue::Type::INT)
-                    push(ToValue::makeInt(a->intVal - b->intVal));
-                else {
-                    double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                    double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                    push(ToValue::makeFloat(av - bv));
-                }
-                break;
-            }
-            case OpCode::MUL: {
-                auto b = pop(); auto a = pop();
-                if (a->type == ToValue::Type::INT && b->type == ToValue::Type::INT)
-                    push(ToValue::makeInt(a->intVal * b->intVal));
-                else {
-                    double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                    double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                    push(ToValue::makeFloat(av * bv));
-                }
-                break;
-            }
-            case OpCode::DIV: {
-                auto b = pop(); auto a = pop();
-                double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                if (bv == 0) throw ToRuntimeError("Division by zero");
-                if (a->type == ToValue::Type::INT && b->type == ToValue::Type::INT && a->intVal % b->intVal == 0)
-                    push(ToValue::makeInt(a->intVal / b->intVal));
-                else {
-                    double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                    push(ToValue::makeFloat(av / bv));
-                }
-                break;
-            }
-            case OpCode::MOD: {
-                auto b = pop(); auto a = pop();
-                if (b->intVal == 0) throw ToRuntimeError("Modulo by zero");
-                push(ToValue::makeInt(a->intVal % b->intVal));
-                break;
-            }
-            case OpCode::NEG: {
-                auto v = pop();
-                if (v->type == ToValue::Type::INT) push(ToValue::makeInt(-v->intVal));
-                else push(ToValue::makeFloat(-v->floatVal));
-                break;
-            }
-
-            // Comparison
-            case OpCode::EQ: {
-                auto b = pop(); auto a = pop();
-                bool eq = false;
-                if (a->type != b->type) eq = false;
-                else {
-                    switch (a->type) {
-                        case ToValue::Type::INT: eq = a->intVal == b->intVal; break;
-                        case ToValue::Type::FLOAT: eq = a->floatVal == b->floatVal; break;
-                        case ToValue::Type::STRING: eq = a->strVal == b->strVal; break;
-                        case ToValue::Type::BOOL: eq = a->boolVal == b->boolVal; break;
-                        case ToValue::Type::NONE: eq = true; break;
-                        default: eq = false;
-                    }
-                }
-                push(ToValue::makeBool(eq));
-                break;
-            }
-            case OpCode::NEQ: {
-                auto b = pop(); auto a = pop();
-                bool eq = false;
-                if (a->type == b->type) {
-                    switch (a->type) {
-                        case ToValue::Type::INT: eq = a->intVal == b->intVal; break;
-                        case ToValue::Type::FLOAT: eq = a->floatVal == b->floatVal; break;
-                        case ToValue::Type::STRING: eq = a->strVal == b->strVal; break;
-                        case ToValue::Type::BOOL: eq = a->boolVal == b->boolVal; break;
-                        case ToValue::Type::NONE: eq = true; break;
-                        default: break;
-                    }
-                }
-                push(ToValue::makeBool(!eq));
-                break;
-            }
-            case OpCode::LT: {
-                auto b = pop(); auto a = pop();
-                double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                push(ToValue::makeBool(av < bv));
-                break;
-            }
-            case OpCode::LTE: {
-                auto b = pop(); auto a = pop();
-                double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                push(ToValue::makeBool(av <= bv));
-                break;
-            }
-            case OpCode::GT: {
-                auto b = pop(); auto a = pop();
-                double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                push(ToValue::makeBool(av > bv));
-                break;
-            }
-            case OpCode::GTE: {
-                auto b = pop(); auto a = pop();
-                double av = a->type == ToValue::Type::INT ? (double)a->intVal : a->floatVal;
-                double bv = b->type == ToValue::Type::INT ? (double)b->intVal : b->floatVal;
-                push(ToValue::makeBool(av >= bv));
-                break;
-            }
-
-            // Logical
-            case OpCode::NOT: {
-                auto v = pop();
-                push(ToValue::makeBool(!v->isTruthy()));
-                break;
-            }
-
-            // Jumps
-            case OpCode::JUMP: {
-                uint16_t offset = readShort(*curFrame->chunk, curFrame->ip);
-                curFrame->ip += offset;
-                break;
-            }
-            case OpCode::JUMP_IF_FALSE: {
-                uint16_t offset = readShort(*curFrame->chunk, curFrame->ip);
-                auto val = pop();
-                if (!val->isTruthy()) curFrame->ip += offset;
-                break;
-            }
-            case OpCode::JUMP_IF_TRUE: {
-                uint16_t offset = readShort(*curFrame->chunk, curFrame->ip);
-                auto val = pop();
-                if (val->isTruthy()) curFrame->ip += offset;
-                break;
-            }
-            case OpCode::LOOP: {
-                uint16_t offset = readShort(*curFrame->chunk, curFrame->ip);
-                curFrame->ip -= offset;
-                break;
-            }
-
-            // Functions
-            case OpCode::CALL: {
-                uint16_t argc = readShort(*curFrame->chunk, curFrame->ip);
-                std::vector<ToValuePtr> args;
-                for (int i = argc - 1; i >= 0; i--) {
-                    args.insert(args.begin(), pop());
-                }
-                auto callee = pop();
-
-                if (callee->type == ToValue::Type::BUILTIN) {
-                    push(callee->builtinVal(args));
-                } else if (callee->type == ToValue::Type::FUNCTION) {
-                    auto& func = callee->funcVal;
-
-                    // Compile function body to bytecode (cached)
-                    // Compile is done in compileFunction
-                    Chunk funcChunk; // unused, just trigger cache
-                    compileFunction(func);
-
-                    // Create function scope
-                    auto funcEnv = (func->closure ? func->closure : curFrame->env)->createChild();
-                    for (size_t i = 0; i < func->params.size() && i < args.size(); i++) {
-                        funcEnv->define(func->params[i], args[i]);
-                    }
-
-                    // Push new call frame
-                    if (frameCount >= FRAMES_MAX) throw ToRuntimeError("Call stack overflow");
-
-                    // Store compiled chunk persistently
-                    auto& stored = functionChunks[func->name];
-
-                    frames[frameCount] = {&stored, 0, stackTop, funcEnv};
-                    frameCount++;
-                    goto restart_frame;
-                } else if (callee->type == ToValue::Type::CLASS) {
-                    // Class instantiation — use tree-walker
-                    auto result = treeWalker->callFunction(callee, args, 0);
-                    push(result);
-                } else {
-                    throw ToRuntimeError("Not callable");
-                }
-                break;
-            }
-            case OpCode::RETURN: {
-                auto result = pop();
-                frameCount--;
-                if (frameCount == 0) {
-                    push(result);
-                    return;
-                }
-                // Restore previous frame
-                push(result);
-                goto restart_frame;
-            }
-
-            // Data structures
-            case OpCode::MAKE_LIST: {
-                uint16_t count = readShort(*curFrame->chunk, curFrame->ip);
-                std::vector<ToValuePtr> items;
-                for (int i = count - 1; i >= 0; i--) {
-                    items.insert(items.begin(), pop());
-                }
-                push(ToValue::makeList(std::move(items)));
-                break;
-            }
-            case OpCode::MAKE_DICT: {
-                uint16_t count = readShort(*curFrame->chunk, curFrame->ip);
-                std::vector<std::pair<std::string, ToValuePtr>> entries;
-                for (int i = count - 1; i >= 0; i--) {
-                    auto val = pop();
-                    auto key = pop();
-                    entries.insert(entries.begin(), {key->strVal, val});
-                }
-                push(ToValue::makeDict(std::move(entries)));
-                break;
-            }
-            case OpCode::MAKE_RANGE: {
-                auto end = pop(); auto start = pop();
-                std::vector<ToValuePtr> list;
-                for (int64_t i = start->intVal; i < end->intVal; i++) {
-                    list.push_back(ToValue::makeInt(i));
-                }
-                push(ToValue::makeList(std::move(list)));
-                break;
-            }
-            case OpCode::INDEX_GET: {
-                auto idx = pop(); auto obj = pop();
-                if (obj->type == ToValue::Type::LIST) {
-                    int64_t i = idx->intVal;
-                    if (i < 0) i += obj->listVal.size();
-                    push(obj->listVal[i]);
-                } else if (obj->type == ToValue::Type::STRING) {
-                    int64_t i = idx->intVal;
-                    if (i < 0) i += obj->strVal.size();
-                    push(ToValue::makeString(std::string(1, obj->strVal[i])));
-                } else if (obj->type == ToValue::Type::DICT) {
-                    for (auto& p : obj->dictVal) {
-                        if (p.first == idx->strVal) { push(p.second); goto done_index; }
-                    }
-                    throw ToRuntimeError("Key not found: " + idx->strVal);
-                    done_index:;
-                } else {
-                    throw ToRuntimeError("Cannot index " + obj->typeName());
-                }
-                break;
-            }
-            case OpCode::INDEX_SET: {
-                auto val = pop(); auto idx = pop(); auto obj = pop();
-                if (obj->type == ToValue::Type::LIST) {
-                    int64_t i = idx->intVal;
-                    if (i < 0) i += obj->listVal.size();
-                    obj->listVal[i] = val;
-                } else if (obj->type == ToValue::Type::DICT) {
-                    for (auto& p : obj->dictVal) {
-                        if (p.first == idx->strVal) { p.second = val; goto done_iset; }
-                    }
-                    obj->dictVal.push_back({idx->strVal, val});
-                    done_iset:;
-                }
-                break;
-            }
-
-            // Member access
-            case OpCode::GET_MEMBER:
-            case OpCode::GET_MEMBER_OPT: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                auto obj = pop();
-                bool optional = (op == OpCode::GET_MEMBER_OPT);
-                if (optional && obj->type == ToValue::Type::NONE) {
-                    push(ToValue::makeNone());
+        try {
+            switch (op) {
+                case OpCode::CONST:   push(chunk->constants[readArg()]); break;
+                case OpCode::POP:     pop(); break;
+                case OpCode::DUP:     push(peek()); break;
+                case OpCode::DUP2: {
+                    auto under = peek(1);
+                    auto over = peek(0);
+                    push(std::move(under));
+                    push(std::move(over));
                     break;
                 }
-                auto& name = curFrame->chunk->names[idx];
-                if (obj->type == ToValue::Type::INSTANCE) {
-                    auto it = obj->instanceVal->fields.find(name);
-                    if (it != obj->instanceVal->fields.end()) { push(it->second); break; }
-                } else if (obj->type == ToValue::Type::DICT) {
-                    for (auto& p : obj->dictVal) {
-                        if (p.first == name) { push(p.second); goto done_member; }
+                case OpCode::NONE:    push(ToValue::makeNone()); break;
+                case OpCode::TRUE_:   push(ToValue::makeBool(true)); break;
+                case OpCode::FALSE_:  push(ToValue::makeBool(false)); break;
+
+                case OpCode::LOAD: {
+                    const std::string& name = chunk->names[readArg()];
+                    auto val = frame->env->get(name);
+                    if (!val) throw ToRuntimeError("Undefined variable '" + name + "'",
+                                                   chunk->lineAt(opOffset));
+                    push(std::move(val));
+                    break;
+                }
+                case OpCode::STORE:
+                    frame->env->set(chunk->names[readArg()], pop());
+                    break;
+                case OpCode::STORE_CONST:
+                    frame->env->defineConst(chunk->names[readArg()], pop());
+                    break;
+
+                case OpCode::ADD: case OpCode::SUB: case OpCode::MUL:
+                case OpCode::DIV: case OpCode::MOD:
+                case OpCode::EQ:  case OpCode::NEQ: case OpCode::LT:
+                case OpCode::LTE: case OpCode::GT:  case OpCode::GTE: {
+                    // The opcodes are laid out to map straight onto BinOp.
+                    BinOp tag = op <= OpCode::MOD
+                        ? (BinOp)((int)op - (int)OpCode::ADD)
+                        : (BinOp)((int)op - (int)OpCode::EQ + (int)BinOp::Eq);
+                    auto right = pop();
+                    auto left = pop();
+                    push(applyBinaryOp(tag, left, right, treeWalker.get(),
+                                       chunk->lineAt(opOffset)));
+                    break;
+                }
+                case OpCode::NEG:
+                    push(applyUnaryOp("-", pop(), chunk->lineAt(opOffset)));
+                    break;
+                case OpCode::NOT:
+                    push(ToValue::makeBool(!pop()->isTruthy()));
+                    break;
+                case OpCode::CONCAT: {
+                    auto right = pop();
+                    auto left = pop();
+                    push(ToValue::makeString(left->toString() + right->toString()));
+                    break;
+                }
+
+                case OpCode::JUMP: frame->ip = readArg(); break;
+                case OpCode::LOOP: frame->ip = readArg(); break;
+                case OpCode::JUMP_IF_FALSE: {
+                    uint16_t target = readArg();
+                    if (!pop()->isTruthy()) frame->ip = target;
+                    break;
+                }
+                case OpCode::JUMP_IF_FALSE_KEEP: {
+                    uint16_t target = readArg();
+                    if (!peek()->isTruthy()) frame->ip = target;
+                    break;
+                }
+                case OpCode::JUMP_IF_TRUE_KEEP: {
+                    uint16_t target = readArg();
+                    if (peek()->isTruthy()) frame->ip = target;
+                    break;
+                }
+
+                case OpCode::MAKE_LIST: case OpCode::MAKE_TUPLE: case OpCode::MAKE_SET: {
+                    uint16_t count = readArg();
+                    std::vector<ToValuePtr> items(count);
+                    for (int i = count - 1; i >= 0; i--) items[i] = pop();
+                    push(op == OpCode::MAKE_LIST  ? ToValue::makeList(std::move(items))
+                       : op == OpCode::MAKE_TUPLE ? ToValue::makeTuple(std::move(items))
+                                                  : ToValue::makeSet(std::move(items)));
+                    break;
+                }
+                case OpCode::MAKE_DICT: {
+                    uint16_t count = readArg();
+                    std::vector<ToValuePtr> flat(count * 2);
+                    for (int i = count * 2 - 1; i >= 0; i--) flat[i] = pop();
+                    ToDict dict;
+                    dict.reserve(count);
+                    for (uint16_t i = 0; i < count; i++) dict.setKey(flat[i * 2], flat[i * 2 + 1]);
+                    push(ToValue::makeDict(std::move(dict)));
+                    break;
+                }
+                case OpCode::MAKE_RANGE: {
+                    auto end = pop();
+                    auto start = pop();
+                    if (start->type != ToValue::Type::INT || end->type != ToValue::Type::INT)
+                        throw ToRuntimeError("Range operator (..) requires integers",
+                                             chunk->lineAt(opOffset));
+                    std::vector<ToValuePtr> items;
+                    if (end->intVal > start->intVal)
+                        items.reserve((size_t)(end->intVal - start->intVal));
+                    for (int64_t i = start->intVal; i < end->intVal; i++)
+                        items.push_back(ToValue::makeInt(i));
+                    push(ToValue::makeList(std::move(items)));
+                    break;
+                }
+
+                case OpCode::INDEX_GET: {
+                    auto index = pop();
+                    auto obj = pop();
+                    push(indexGet(obj, index, chunk->lineAt(opOffset)));
+                    break;
+                }
+                case OpCode::INDEX_SET: {
+                    auto val = pop();
+                    auto index = pop();
+                    auto obj = pop();
+                    indexSet(obj, index, std::move(val), chunk->lineAt(opOffset));
+                    break;
+                }
+                case OpCode::SLICE: {
+                    auto step = pop();
+                    auto end = pop();
+                    auto start = pop();
+                    auto obj = pop();
+                    push(sliceValue(obj, start, end, step, chunk->lineAt(opOffset)));
+                    break;
+                }
+
+                case OpCode::GET_MEMBER: case OpCode::GET_MEMBER_OPT: {
+                    const std::string& name = chunk->names[readArg()];
+                    auto obj = pop();
+                    if (op == OpCode::GET_MEMBER_OPT && obj->type == ToValue::Type::NONE) {
+                        push(ToValue::makeNone());
+                        break;
                     }
-                } else if (obj->type == ToValue::Type::LIST && name == "length") {
-                    push(ToValue::makeInt(obj->listVal.size())); break;
-                } else if (obj->type == ToValue::Type::STRING && name == "length") {
-                    push(ToValue::makeInt(obj->strVal.size())); break;
+                    auto prop = getBuiltinProperty(obj, name);
+                    if (prop) { push(std::move(prop)); break; }
+                    if (obj->type == ToValue::Type::DICT)
+                        throw ToRuntimeError("Dictionary has no key '" + name + "'",
+                                             chunk->lineAt(opOffset));
+                    if (obj->type == ToValue::Type::INSTANCE)
+                        throw ToRuntimeError("'" + obj->instanceVal->klass->name +
+                                             "' instance has no field '" + name + "'",
+                                             chunk->lineAt(opOffset));
+                    throw ToRuntimeError("Cannot access member '" + name + "' on " +
+                                         obj->typeName(), chunk->lineAt(opOffset));
                 }
-                push(ToValue::makeNone());
-                done_member:;
-                break;
-            }
-            case OpCode::SET_MEMBER: {
-                uint16_t idx = readShort(*curFrame->chunk, curFrame->ip);
-                auto val = pop();
-                auto obj = pop();
-                auto& name = curFrame->chunk->names[idx];
-                if (obj->type == ToValue::Type::INSTANCE) {
-                    obj->instanceVal->fields[name] = val;
-                } else if (obj->type == ToValue::Type::DICT) {
-                    for (auto& p : obj->dictVal) {
-                        if (p.first == name) { p.second = val; goto done_smember; }
+                case OpCode::SET_MEMBER: {
+                    const std::string& name = chunk->names[readArg()];
+                    auto val = pop();
+                    auto obj = pop();
+                    if (obj->type == ToValue::Type::INSTANCE)
+                        obj->instanceVal->fields[name] = std::move(val);
+                    else if (obj->type == ToValue::Type::DICT)
+                        obj->dictVal.set(name, std::move(val));
+                    else
+                        throw ToRuntimeError("Cannot set member '" + name + "' on " +
+                                             obj->typeName(), chunk->lineAt(opOffset));
+                    break;
+                }
+
+                case OpCode::GET_ITER: {
+                    auto iterable = pop();
+                    if (iterable->type == ToValue::Type::GENERATOR) {
+                        // A one-element iterator marks the lazy case.
+                        push(ToValue::makeList({iterable}));
+                        break;
                     }
-                    obj->dictVal.push_back({name, val});
-                    done_smember:;
+                    if (iterable->length() < 0)
+                        throw ToRuntimeError("Cannot iterate over " + iterable->typeName(),
+                                             chunk->lineAt(opOffset));
+                    push(ToValue::makeList({ToValue::makeList(iterable->elements()),
+                                            ToValue::makeInt(0)}));
+                    break;
                 }
-                break;
-            }
-
-            // String concatenation for interpolation
-            case OpCode::CONCAT: {
-                auto b = pop(); auto a = pop();
-                push(ToValue::makeString(a->toString() + b->toString()));
-                break;
-            }
-
-            // Iteration
-            case OpCode::GET_ITER: {
-                // Convert iterable to a list-based iterator
-                auto iterable = pop();
-                if (iterable->type == ToValue::Type::LIST) {
-                    // Push a dict with {items, index}
-                    auto iter = ToValue::makeDict({});
-                    iter->dictVal.push_back({"__items__", iterable});
-                    iter->dictVal.push_back({"__index__", ToValue::makeInt(0)});
-                    push(iter);
-                } else if (iterable->type == ToValue::Type::STRING) {
-                    std::vector<ToValuePtr> chars;
-                    for (char c : iterable->strVal) chars.push_back(ToValue::makeString(std::string(1, c)));
-                    auto iter = ToValue::makeDict({});
-                    iter->dictVal.push_back({"__items__", ToValue::makeList(std::move(chars))});
-                    iter->dictVal.push_back({"__index__", ToValue::makeInt(0)});
-                    push(iter);
-                } else {
-                    throw ToRuntimeError("Cannot iterate over " + iterable->typeName());
-                }
-                break;
-            }
-            case OpCode::ITER_NEXT: {
-                auto iter = pop();
-                ToValuePtr items, indexVal;
-                for (auto& p : iter->dictVal) {
-                    if (p.first == "__items__") items = p.second;
-                    if (p.first == "__index__") indexVal = p.second;
-                }
-                int64_t idx = indexVal->intVal;
-                if (idx < (int64_t)items->listVal.size()) {
-                    push(items->listVal[idx]);
-                    // Increment index
-                    for (auto& p : iter->dictVal) {
-                        if (p.first == "__index__") { p.second = ToValue::makeInt(idx + 1); break; }
+                case OpCode::ITER_NEXT: {
+                    auto iter = pop();
+                    if (iter->listVal.size() == 1) {
+                        auto gen = iter->listVal[0];
+                        auto value = treeWalker->nextGeneratorValue(gen);
+                        if (gen->generatorVal->state->done &&
+                            !gen->generatorVal->state->hasValue) {
+                            push(ToValue::makeBool(false));
+                        } else {
+                            push(std::move(value));
+                            push(ToValue::makeBool(true));
+                        }
+                        break;
                     }
-                    push(ToValue::makeBool(true)); // not done
-                } else {
-                    push(ToValue::makeBool(false)); // done
+                    auto& items = iter->listVal[0]->listVal;
+                    int64_t idx = iter->listVal[1]->intVal;
+                    if (idx < (int64_t)items.size()) {
+                        push(items[idx]);
+                        iter->listVal[1] = ToValue::makeInt(idx + 1);
+                        push(ToValue::makeBool(true));
+                    } else {
+                        push(ToValue::makeBool(false));
+                    }
+                    break;
                 }
-                break;
+
+                case OpCode::PRINT:
+                    std::cout << pop()->toString() << std::endl;
+                    break;
+
+                case OpCode::ASSERT: {
+                    uint16_t msg = readArg();
+                    if (!pop()->isTruthy())
+                        throw ToRuntimeError(chunk->constants[msg]->strVal, chunk->lineAt(opOffset));
+                    break;
+                }
+
+                case OpCode::CALL: {
+                    uint16_t argc = readArg();
+                    std::vector<ToValuePtr> args(argc);
+                    for (int i = argc - 1; i >= 0; i--) args[i] = pop();
+                    auto callee = pop();
+                    int line = chunk->lineAt(opOffset);
+
+                    if (callee->type == ToValue::Type::BUILTIN) {
+                        push(callee->builtinVal(std::move(args)));
+                        break;
+                    }
+                    if (callee->type == ToValue::Type::FUNCTION && !needsInterpreter(callee->funcVal)) {
+                        auto& func = callee->funcVal;
+                        if (args.size() != func->params.size())
+                            throw ToRuntimeError("Function '" + func->name + "' expects " +
+                                std::to_string(func->params.size()) + " arguments, got " +
+                                std::to_string(args.size()), line);
+                        if (frameCount >= FRAMES_MAX) throw ToRuntimeError("Call stack overflow", line);
+                        Chunk* target = chunkFor(func);
+                        auto funcEnv = (func->closure ? func->closure : globalEnv)->createChild();
+                        for (size_t i = 0; i < func->params.size(); i++)
+                            funcEnv->define(func->params[i], std::move(args[i]));
+                        frames[frameCount++] = CallFrame{target, 0, stackTop, funcEnv, func, {}};
+                        break;
+                    }
+                    // Generators, typed functions, classes and anything else
+                    // keep the interpreter's exact behaviour.
+                    push(treeWalker->callFunction(callee, args, line));
+                    break;
+                }
+
+                case OpCode::SCOPE_BEGIN:
+                    frame->scopes.push_back(frame->env);
+                    frame->env = frame->env->createChild();
+                    break;
+
+                case OpCode::SCOPE_TRUNC: {
+                    uint16_t depth = readArg();
+                    if (frame->scopes.size() > depth) {
+                        frame->env = frame->scopes[depth];
+                        frame->scopes.resize(depth);
+                    }
+                    break;
+                }
+
+                case OpCode::CALL_METHOD: case OpCode::CALL_METHOD_OPT: {
+                    uint16_t nameIdx = readArg();
+                    uint8_t argc = code[frame->ip++];
+                    const std::string& name = chunk->names[nameIdx];
+                    std::vector<ToValuePtr> args(argc);
+                    for (int i = argc - 1; i >= 0; i--) args[i] = pop();
+                    auto recv = pop();
+                    int line = chunk->lineAt(opOffset);
+
+                    if (op == OpCode::CALL_METHOD_OPT && recv->type == ToValue::Type::NONE) {
+                        push(ToValue::makeNone());
+                        break;
+                    }
+                    if (recv->type == ToValue::Type::GENERATOR) {
+                        if (name == "next") { push(treeWalker->nextGeneratorValue(recv)); break; }
+                        if (name == "to_list") {
+                            std::vector<ToValuePtr> all;
+                            while (true) {
+                                auto v = treeWalker->nextGeneratorValue(recv);
+                                if (v->type == ToValue::Type::NONE &&
+                                    recv->generatorVal->state->done) break;
+                                all.push_back(std::move(v));
+                            }
+                            push(ToValue::makeList(std::move(all)));
+                            break;
+                        }
+                        throw ToRuntimeError("Generator has no method '" + name + "'", line);
+                    }
+                    if (recv->type == ToValue::Type::INSTANCE) {
+                        bool found = false;
+                        auto result = treeWalker->callInstanceMethod(recv, name, args, line, &found);
+                        if (found) { push(std::move(result)); break; }
+                        auto it = recv->instanceVal->fields.find(name);
+                        if (it != recv->instanceVal->fields.end()) {
+                            push(treeWalker->callFunction(it->second, args, line));
+                            break;
+                        }
+                        throw ToRuntimeError("'" + recv->instanceVal->klass->name +
+                                             "' has no method '" + name + "'", line);
+                    }
+                    if (recv->type == ToValue::Type::DICT) {
+                        // Module members and stored callables shadow built-ins.
+                        auto member = recv->dictVal.get(name);
+                        if (member && (member->type == ToValue::Type::BUILTIN ||
+                                       member->type == ToValue::Type::FUNCTION)) {
+                            push(treeWalker->callFunction(member, args, line));
+                            break;
+                        }
+                    }
+                    push(callBuiltinMethod(recv, name, args, treeWalker.get(), line));
+                    break;
+                }
+
+                case OpCode::TAIL_CALL: {
+                    uint16_t argc = readArg();
+                    std::vector<ToValuePtr> args(argc);
+                    for (int i = argc - 1; i >= 0; i--) args[i] = pop();
+                    auto& func = frame->func;
+                    // Rebind the parameters in a fresh scope and restart the body,
+                    // so self-recursion runs in constant stack space.
+                    auto funcEnv = (func->closure ? func->closure : globalEnv)->createChild();
+                    for (size_t i = 0; i < func->params.size() && i < args.size(); i++)
+                        funcEnv->define(func->params[i], std::move(args[i]));
+                    frame->env = funcEnv;
+                    frame->ip = 0;
+                    stackTop = frame->stackBase;
+                    break;
+                }
+
+                case OpCode::RETURN:
+                    if (!returnFrom(pop())) return;
+                    break;
+
+                case OpCode::EXEC_AST: {
+                    uint16_t slot = readArg();
+                    auto& entry = chunk->asts[slot];
+                    size_t depth = stackTop;
+                    try {
+                        treeWalker->execStatement(entry.node, frame->env);
+                    } catch (BreakSignal&) {
+                        stackTop = depth;
+                        if (entry.breakTarget < 0) throw;
+                        frame->ip = (size_t)entry.breakTarget;
+                    } catch (ContinueSignal&) {
+                        stackTop = depth;
+                        if (entry.continueTarget < 0) throw;
+                        frame->ip = (size_t)entry.continueTarget;
+                    } catch (ReturnException& e) {
+                        stackTop = depth;
+                        if (!returnFrom(e.value)) return;
+                    }
+                    break;
+                }
+                case OpCode::EVAL_AST: {
+                    uint16_t slot = readArg();
+                    push(treeWalker->eval(chunk->asts[slot].node, frame->env));
+                    break;
+                }
+
+                case OpCode::HALT:
+                    return;
+
+                default:
+                    throw ToRuntimeError("Unknown opcode " + std::to_string((int)op),
+                                         chunk->lineAt(opOffset));
             }
-
-            case OpCode::PRINT: {
-                auto val = pop();
-                std::cout << val->toString() << std::endl;
-                break;
+        } catch (ToRuntimeError& e) {
+            if (e.line == 0) {
+                ToRuntimeError located(e.detail.empty() ? e.what() : e.detail,
+                                       chunk->lineAt(opOffset));
+                throw located;
             }
-
-            case OpCode::NONE: push(ToValue::makeNone()); break;
-            case OpCode::TRUE_: push(ToValue::makeBool(true)); break;
-            case OpCode::FALSE_: push(ToValue::makeBool(false)); break;
-
-            case OpCode::HALT: return;
-
-            default:
-                throw ToRuntimeError("Unknown opcode: " + std::to_string((int)op));
+            throw;
         }
     }
-    // If inner while exits (end of chunk without HALT/RETURN), implicit return
-    if (frameCount > 1) {
-        frameCount--;
-        push(ToValue::makeNone());
-        goto restart_frame;
+}
+
+// ========================
+// Disassembler (to debug the compiler)
+// ========================
+
+void Chunk::disassemble(const std::string& name) const {
+    std::cout << "== " << name << " ==\n";
+    size_t offset = 0;
+    while (offset < code.size()) {
+        printf("%04zu %4d ", offset, lineAt(offset));
+        OpCode op = (OpCode)code[offset];
+        auto arg = [&]() { return (uint16_t)((code[offset + 1] << 8) | code[offset + 2]); };
+        switch (op) {
+            case OpCode::CONST:   printf("CONST %s\n", constants[arg()]->repr().c_str()); offset += 3; break;
+            case OpCode::LOAD:    printf("LOAD %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::STORE:   printf("STORE %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::STORE_CONST: printf("STORE_CONST %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::GET_MEMBER: printf("GET_MEMBER %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::GET_MEMBER_OPT: printf("GET_MEMBER_OPT %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::SET_MEMBER: printf("SET_MEMBER %s\n", names[arg()].c_str()); offset += 3; break;
+            case OpCode::CALL:    printf("CALL %d\n", arg()); offset += 3; break;
+            case OpCode::TAIL_CALL: printf("TAIL_CALL %d\n", arg()); offset += 3; break;
+            case OpCode::CALL_METHOD:
+                printf("CALL_METHOD %s/%d\n", names[arg()].c_str(), code[offset + 3]);
+                offset += 4; break;
+            case OpCode::JUMP:    printf("JUMP -> %d\n", arg()); offset += 3; break;
+            case OpCode::LOOP:    printf("LOOP -> %d\n", arg()); offset += 3; break;
+            case OpCode::JUMP_IF_FALSE: printf("JUMP_IF_FALSE -> %d\n", arg()); offset += 3; break;
+            case OpCode::JUMP_IF_FALSE_KEEP: printf("JUMP_IF_FALSE_KEEP -> %d\n", arg()); offset += 3; break;
+            case OpCode::JUMP_IF_TRUE_KEEP: printf("JUMP_IF_TRUE_KEEP -> %d\n", arg()); offset += 3; break;
+            case OpCode::MAKE_LIST:  printf("MAKE_LIST %d\n", arg()); offset += 3; break;
+            case OpCode::MAKE_TUPLE: printf("MAKE_TUPLE %d\n", arg()); offset += 3; break;
+            case OpCode::MAKE_SET:   printf("MAKE_SET %d\n", arg()); offset += 3; break;
+            case OpCode::MAKE_DICT:  printf("MAKE_DICT %d\n", arg()); offset += 3; break;
+            case OpCode::ASSERT:     printf("ASSERT\n"); offset += 3; break;
+            case OpCode::EXEC_AST:   printf("EXEC_AST %d\n", arg()); offset += 3; break;
+            case OpCode::EVAL_AST:   printf("EVAL_AST %d\n", arg()); offset += 3; break;
+            default: {
+                static const char* simple[] = {"POP", "DUP", "ADD", "SUB", "MUL", "DIV", "MOD",
+                                               "NEG", "NOT", "EQ", "NEQ", "LT", "LTE", "GT", "GTE",
+                                               "CONCAT", "RETURN", "INDEX_GET", "INDEX_SET",
+                                               "SLICE", "GET_ITER", "ITER_NEXT", "PRINT",
+                                               "NONE", "TRUE", "FALSE", "MAKE_RANGE", "HALT"};
+                (void)simple;
+                printf("OP_%d\n", (int)op);
+                offset += 1;
+                break;
+            }
+        }
     }
 }

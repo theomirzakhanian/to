@@ -1077,12 +1077,33 @@ ASTNodePtr Parser::parsePostfix() {
         } else if (check(TokenType::LBRACKET)) {
             int line = current().line;
             advance(); // skip '['
-            auto index = parseExpression();
+
+            // Slice: xs[a:b], xs[:b], xs[a:], xs[:], xs[a:b:c]
+            ASTNodePtr first;
+            if (!check(TokenType::COLON)) first = parseExpression();
+
+            if (check(TokenType::COLON)) {
+                advance();
+                auto node = std::make_shared<ASTNode>();
+                node->type = NodeType::SliceExpr;
+                node->object = expr;
+                node->rangeStart = first;
+                node->line = line;
+                if (!check(TokenType::RBRACKET) && !check(TokenType::COLON))
+                    node->rangeEnd = parseExpression();
+                if (match(TokenType::COLON)) {
+                    if (!check(TokenType::RBRACKET)) node->indexExpr = parseExpression();
+                }
+                expect(TokenType::RBRACKET, "Expected ']' after slice");
+                expr = node;
+                continue;
+            }
+
             expect(TokenType::RBRACKET, "Expected ']' after index");
             auto node = std::make_shared<ASTNode>();
             node->type = NodeType::IndexExpr;
             node->object = expr;
-            node->indexExpr = index;
+            node->indexExpr = first;
             node->line = line;
             expr = node;
         } else if (check(TokenType::LPAREN)) {
@@ -1216,27 +1237,51 @@ ASTNodePtr Parser::parsePrimary() {
         return node;
     }
 
-    // Dictionary literal
+    // Dictionary literal {name = value} or set literal {a, b, c}.
+    // The two are told apart by looking for the '=' after the first key.
     if (check(TokenType::LBRACE)) {
         int line = current().line;
         advance();
-        auto node = std::make_shared<ASTNode>();
-        node->type = NodeType::DictLiteral;
-        node->line = line;
         skipNewlines();
-        if (!check(TokenType::RBRACE)) {
-            Token key = expect(TokenType::IDENTIFIER, "Expected key name in dictionary");
-            expect(TokenType::EQUAL, "Expected '=' after dictionary key");
-            ASTNodePtr val = parseExpression();
-            node->entries.push_back({key.value, val});
+
+        if (check(TokenType::RBRACE)) {
+            // `{}` stays an empty dict; `set()` builds an empty set.
+            advance();
+            auto node = std::make_shared<ASTNode>();
+            node->type = NodeType::DictLiteral;
+            node->line = line;
+            return node;
+        }
+
+        bool isDict = false;
+        if (check(TokenType::IDENTIFIER) || check(TokenType::STRING) ||
+            check(TokenType::INTEGER) || check(TokenType::FLOAT)) {
+            isDict = peek().type == TokenType::EQUAL;
+        }
+
+        if (!isDict) {
+            auto node = std::make_shared<ASTNode>();
+            node->type = NodeType::SetLiteral;
+            node->line = line;
+            node->elements.push_back(parseExpression());
             while (match(TokenType::COMMA)) {
                 skipNewlines();
                 if (check(TokenType::RBRACE)) break;
-                key = expect(TokenType::IDENTIFIER, "Expected key name in dictionary");
-                expect(TokenType::EQUAL, "Expected '=' after dictionary key");
-                val = parseExpression();
-                node->entries.push_back({key.value, val});
+                node->elements.push_back(parseExpression());
             }
+            skipNewlines();
+            expect(TokenType::RBRACE, "Expected '}' to close set");
+            return node;
+        }
+
+        auto node = std::make_shared<ASTNode>();
+        node->type = NodeType::DictLiteral;
+        node->line = line;
+        while (true) {
+            node->entries.push_back(parseDictEntry());
+            if (!match(TokenType::COMMA)) break;
+            skipNewlines();
+            if (check(TokenType::RBRACE)) break;
         }
         skipNewlines();
         expect(TokenType::RBRACE, "Expected '}' to close dictionary");
@@ -1302,13 +1347,65 @@ ASTNodePtr Parser::parsePrimary() {
             return node;
         }
 
+        // Empty tuple: ()
+        if (check(TokenType::RPAREN)) {
+            int line = current().line;
+            advance();
+            auto node = std::make_shared<ASTNode>();
+            node->type = NodeType::TupleLiteral;
+            node->line = line;
+            return node;
+        }
+
+        int line = current().line;
         auto expr = parseExpression();
+
+        // Tuple: (a, b) and the single-element form (a,)
+        if (check(TokenType::COMMA)) {
+            auto node = std::make_shared<ASTNode>();
+            node->type = NodeType::TupleLiteral;
+            node->line = line;
+            node->elements.push_back(expr);
+            while (match(TokenType::COMMA)) {
+                skipNewlines();
+                if (check(TokenType::RPAREN)) break;
+                node->elements.push_back(parseExpression());
+            }
+            expect(TokenType::RPAREN, "Expected ')' to close tuple");
+            return node;
+        }
+
         expect(TokenType::RPAREN, "Expected ')'");
         return expr;
     }
 
     throw ToError(filename, current().line, current().column,
         "Unexpected token: " + tokenTypeName(current().type) + " '" + current().value + "'");
+}
+
+// A single `key = value` pair inside a dict literal. Keys may be bare
+// names, strings, or numbers; anything else belongs in `d[expr] = value`.
+DictEntry Parser::parseDictEntry() {
+    DictEntry entry;
+    if (check(TokenType::IDENTIFIER)) {
+        entry.key = advance().value;
+    } else if (check(TokenType::STRING)) {
+        entry.key = advance().value;
+    } else if (check(TokenType::INTEGER)) {
+        Token t = advance();
+        entry.key = t.value;
+        entry.keyExpr = ASTNode::makeInt(std::stoll(t.value), t.line);
+    } else if (check(TokenType::FLOAT)) {
+        Token t = advance();
+        entry.key = t.value;
+        entry.keyExpr = ASTNode::makeFloat(std::stod(t.value), t.line);
+    } else {
+        throw ToError(filename, current().line, current().column,
+            "Expected a key name in dictionary");
+    }
+    expect(TokenType::EQUAL, "Expected '=' after dictionary key");
+    entry.value = parseExpression();
+    return entry;
 }
 
 ASTNodePtr Parser::parseStringWithInterpolation(const std::string& raw, int line) {

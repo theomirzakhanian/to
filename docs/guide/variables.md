@@ -43,7 +43,15 @@ x = true
 | `bool` | `true` / `false` | Boolean |
 | `none` | `none` | Absence of value |
 | `list` | `[1, 2, 3]` | Ordered collection |
+| `tuple` | `(1, 2, 3)` | Fixed group, usable as a dict key |
+| `set` | `{1, 2, 3}` | Unique values |
 | `dict` | `{name = "Theo"}` | Key-value pairs |
+| `deque` | `deque([1, 2])` | Add and remove at both ends |
+| `queue` | `queue([1, 2])` | First in, first out |
+| `stack` | `stack([1, 2])` | Last in, first out |
+| `heap` | `heap([3, 1])` | Smallest value out first |
+
+See [Collections](collections.md) for what each one can do.
 
 ## Strings
 

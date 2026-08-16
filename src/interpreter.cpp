@@ -6,6 +6,7 @@
 #include "http.h"
 #include "ffi.h"
 #include "to_stdlib.h"
+#include "methods.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -18,7 +19,7 @@ Interpreter::Interpreter(const std::string& filename)
 }
 
 // Thread-local state: the generator currently producing values in this thread
-thread_local std::shared_ptr<ToGenerator> currentGenerator = nullptr;
+thread_local ToGeneratorStatePtr currentGenerator = nullptr;
 
 // Thread-local state: current function name for TCO
 thread_local std::string tcoCurrentFunc = "";
@@ -226,9 +227,9 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
         }
         case NodeType::DestructureList: {
             auto val = eval(node->value, env);
-            if (val->type != ToValue::Type::LIST)
-                throw ToRuntimeError("Cannot destructure non-list value", node->line);
-            auto& list = val->listVal;
+            if (val->length() < 0 || val->type == ToValue::Type::DICT)
+                throw ToRuntimeError("Cannot destructure " + val->typeName(), node->line);
+            auto list = val->elements();
             for (size_t i = 0; i < node->destructNames.size(); i++) {
                 if (i < list.size()) {
                     env->define(node->destructNames[i], list[i]);
@@ -251,7 +252,7 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
                 throw ToRuntimeError("Cannot destructure non-dict value", node->line);
             for (auto& name : node->destructNames) {
                 bool found = false;
-                for (auto& [k, v] : val->dictVal) {
+                for (auto& [k, v, kv] : val->dictVal) {
                     if (k == name) {
                         env->define(name, v);
                         found = true;
@@ -269,18 +270,18 @@ void Interpreter::execStatement(ASTNodePtr node, EnvPtr env) {
             }
             auto& gen = currentGenerator;
             {
-                std::unique_lock<std::mutex> lock(*gen->mtx);
-                *gen->currentValue = val;
-                *gen->hasValue = true;
-                *gen->consumerReady = false;
+                std::unique_lock<std::mutex> lock(gen->mtx);
+                gen->currentValue = val;
+                gen->hasValue = true;
+                gen->consumerReady = false;
             }
-            gen->cv->notify_all();
+            gen->cv.notify_all();
             // Wait for consumer to ask for next
             {
-                std::unique_lock<std::mutex> lock(*gen->mtx);
-                gen->cv->wait(lock, [&gen]() { return (bool)*gen->consumerReady || (bool)*gen->done; });
+                std::unique_lock<std::mutex> lock(gen->mtx);
+                gen->cv.wait(lock, [&gen]() { return (bool)gen->consumerReady || (bool)gen->done; });
             }
-            if (*gen->done) {
+            if (gen->done) {
                 // Generator was abandoned — stop execution
                 throw ReturnException(ToValue::makeNone());
             }
@@ -333,44 +334,8 @@ void Interpreter::execAssignment(ASTNodePtr node, EnvPtr env) {
             throw ToRuntimeError("Invalid assignment target", target->line);
         }
 
-        // Compute new value
-        if (node->assignOp == "+=") {
-            if (existing->type == ToValue::Type::INT && val->type == ToValue::Type::INT)
-                val = ToValue::makeInt(existing->intVal + val->intVal);
-            else if (existing->type == ToValue::Type::FLOAT || val->type == ToValue::Type::FLOAT) {
-                double a = existing->type == ToValue::Type::INT ? (double)existing->intVal : existing->floatVal;
-                double b = val->type == ToValue::Type::INT ? (double)val->intVal : val->floatVal;
-                val = ToValue::makeFloat(a + b);
-            } else if (existing->type == ToValue::Type::STRING) {
-                val = ToValue::makeString(existing->strVal + val->toString());
-            } else {
-                throw ToRuntimeError("Cannot use += with " + existing->typeName(), target->line);
-            }
-        } else if (node->assignOp == "-=") {
-            if (existing->type == ToValue::Type::INT && val->type == ToValue::Type::INT)
-                val = ToValue::makeInt(existing->intVal - val->intVal);
-            else {
-                double a = existing->type == ToValue::Type::INT ? (double)existing->intVal : existing->floatVal;
-                double b = val->type == ToValue::Type::INT ? (double)val->intVal : val->floatVal;
-                val = ToValue::makeFloat(a - b);
-            }
-        } else if (node->assignOp == "*=") {
-            if (existing->type == ToValue::Type::INT && val->type == ToValue::Type::INT)
-                val = ToValue::makeInt(existing->intVal * val->intVal);
-            else {
-                double a = existing->type == ToValue::Type::INT ? (double)existing->intVal : existing->floatVal;
-                double b = val->type == ToValue::Type::INT ? (double)val->intVal : val->floatVal;
-                val = ToValue::makeFloat(a * b);
-            }
-        } else if (node->assignOp == "/=") {
-            double a = existing->type == ToValue::Type::INT ? (double)existing->intVal : existing->floatVal;
-            double b = val->type == ToValue::Type::INT ? (double)val->intVal : val->floatVal;
-            if (b == 0) throw ToRuntimeError("Division by zero", target->line);
-            if (existing->type == ToValue::Type::INT && val->type == ToValue::Type::INT && existing->intVal % val->intVal == 0)
-                val = ToValue::makeInt(existing->intVal / val->intVal);
-            else
-                val = ToValue::makeFloat(a / b);
-        }
+        // One implementation of each operator, shared with the VM.
+        val = applyBinaryOp(node->assignOp.substr(0, 1), existing, val, this, target->line);
     }
 
     // Assign to target
@@ -397,29 +362,7 @@ void Interpreter::execAssignment(ASTNodePtr node, EnvPtr env) {
         }
     } else if (target->type == NodeType::IndexExpr) {
         auto obj = eval(target->object, env);
-        auto idx = eval(target->indexExpr, env);
-        if (obj->type == ToValue::Type::LIST) {
-            if (idx->type != ToValue::Type::INT)
-                throw ToRuntimeError("List index must be an integer", target->line);
-            int64_t i = idx->intVal;
-            if (i < 0) i += obj->listVal.size();
-            if (i < 0 || i >= (int64_t)obj->listVal.size())
-                throw ToRuntimeError("Index out of bounds", target->line);
-            obj->listVal[i] = val;
-        } else if (obj->type == ToValue::Type::DICT) {
-            if (idx->type != ToValue::Type::STRING)
-                throw ToRuntimeError("Dict key must be a string", target->line);
-            // Update existing key or add new
-            for (auto& pair : obj->dictVal) {
-                if (pair.first == idx->strVal) {
-                    pair.second = val;
-                    return;
-                }
-            }
-            obj->dictVal.push_back({idx->strVal, val});
-        } else {
-            throw ToRuntimeError("Cannot index " + obj->typeName(), target->line);
-        }
+        indexSet(obj, eval(target->indexExpr, env), val, target->line);
     } else {
         throw ToRuntimeError("Invalid assignment target", target->line);
     }
@@ -549,19 +492,10 @@ void Interpreter::execGiven(ASTNodePtr node, EnvPtr env) {
             return;
         }
 
-        // Standard value match
+        // Standard value match — the same equality `==` uses, so a branch
+        // can match a list, tuple, set or dict as readily as a number.
         auto branchVal = eval(branch.condition, env);
-        bool match = false;
-        if (val->type == branchVal->type) {
-            switch (val->type) {
-                case ToValue::Type::INT: match = val->intVal == branchVal->intVal; break;
-                case ToValue::Type::FLOAT: match = val->floatVal == branchVal->floatVal; break;
-                case ToValue::Type::STRING: match = val->strVal == branchVal->strVal; break;
-                case ToValue::Type::BOOL: match = val->boolVal == branchVal->boolVal; break;
-                default: match = false;
-            }
-        }
-        if (match) {
+        if (valueEquals(val, branchVal)) {
             execBlock(branch.body, env);
             return;
         }
@@ -586,23 +520,16 @@ void Interpreter::execThrough(ASTNodePtr node, EnvPtr env) {
     auto iterable = eval(node->iterable, env);
 
     std::vector<ToValuePtr> items;
-    if (iterable->type == ToValue::Type::LIST) {
-        items = iterable->listVal;
-    } else if (iterable->type == ToValue::Type::DICT) {
-        // Iterate over keys by default
-        for (auto& pair : iterable->dictVal) {
-            items.push_back(ToValue::makeString(pair.first));
-        }
-    } else if (iterable->type == ToValue::Type::STRING) {
-        // Iterate over characters
-        for (char c : iterable->strVal) {
-            items.push_back(ToValue::makeString(std::string(1, c)));
-        }
+    if (iterable->length() >= 0) {
+        // Lists, tuples, sets, deques, queues, stacks, heaps, strings by
+        // character, and dicts by key.
+        items = iterable->elements();
     } else if (iterable->type == ToValue::Type::GENERATOR) {
         // Lazy iteration over a generator
         while (true) {
             auto v = nextGeneratorValue(iterable);
-            if (*iterable->generatorVal->done && !*iterable->generatorVal->hasValue) break;
+            auto& genState = iterable->generatorVal->state;
+            if (genState->done && !genState->hasValue) break;
             auto loopEnv = env->createChild();
             loopEnv->define(node->loopVar, v);
             try {
@@ -611,8 +538,12 @@ void Interpreter::execThrough(ASTNodePtr node, EnvPtr env) {
                 }
             } catch (BreakSignal&) {
                 // Signal generator to stop
-                *iterable->generatorVal->done = true;
-                iterable->generatorVal->cv->notify_all();
+                {
+                    std::lock_guard<std::mutex> lock(genState->mtx);
+                    genState->done = true;
+                    genState->consumerReady = true;
+                }
+                genState->cv.notify_all();
                 return;
             } catch (ContinueSignal&) {
                 continue;
@@ -693,7 +624,7 @@ void Interpreter::execClassDef(ASTNodePtr node, EnvPtr env) {
         if (!shapeVal || shapeVal->type != ToValue::Type::DICT)
             throw ToRuntimeError("Shape '" + node->fitsShape + "' not found", node->line);
         // Check each required method exists in the class
-        for (auto& [key, val] : shapeVal->dictVal) {
+        for (auto& [key, val, keyObj] : shapeVal->dictVal) {
             if (key.substr(0, 2) == "__") continue; // skip meta keys
             bool found = false;
             for (auto& m : klass->methods) {
@@ -926,11 +857,24 @@ ToValuePtr Interpreter::eval(ASTNodePtr node, EnvPtr env) {
         case NodeType::MemberAccess:
             return evalMemberAccess(node, env);
         case NodeType::IndexExpr:
+        case NodeType::SliceExpr:
             return evalIndexExpr(node, env);
         case NodeType::StringInterpolation:
             return evalStringInterp(node, env);
         case NodeType::ListLiteral:
             return evalListLiteral(node, env);
+        case NodeType::TupleLiteral: {
+            std::vector<ToValuePtr> items;
+            items.reserve(node->elements.size());
+            for (auto& elem : node->elements) items.push_back(eval(elem, env));
+            return ToValue::makeTuple(std::move(items));
+        }
+        case NodeType::SetLiteral: {
+            std::vector<ToValuePtr> items;
+            items.reserve(node->elements.size());
+            for (auto& elem : node->elements) items.push_back(eval(elem, env));
+            return ToValue::makeSet(std::move(items));
+        }
         case NodeType::DictLiteral:
             return evalDictLiteral(node, env);
         case NodeType::RangeLiteral:
@@ -1004,6 +948,37 @@ ToValuePtr Interpreter::eval(ASTNodePtr node, EnvPtr env) {
     }
 }
 
+ToValuePtr Interpreter::callInstanceMethod(const ToValuePtr& obj, const std::string& name,
+                                           const std::vector<ToValuePtr>& args, int line,
+                                           bool* found) {
+    if (found) *found = false;
+    if (!obj || obj->type != ToValue::Type::INSTANCE) return ToValue::makeNone();
+    auto& inst = obj->instanceVal;
+    for (auto& m : inst->klass->methods) {
+        if (m.name != name) continue;
+        if (found) *found = true;
+        if (args.size() != m.params.size()) {
+            throw ToRuntimeError("Method '" + name + "' expects " +
+                std::to_string(m.params.size()) + " arguments, got " +
+                std::to_string(args.size()), line);
+        }
+        auto methodEnv = inst->klass->closure->createChild();
+        methodEnv->define("my", obj);
+        for (size_t i = 0; i < m.params.size(); i++) {
+            methodEnv->define(m.params[i], args[i]);
+        }
+        try {
+            for (auto& stmt : m.body) {
+                execStatement(stmt, methodEnv);
+            }
+        } catch (ReturnException& e) {
+            return e.value;
+        }
+        return ToValue::makeNone();
+    }
+    return ToValue::makeNone();
+}
+
 ToValuePtr Interpreter::evalBinaryExpr(ASTNodePtr node, EnvPtr env) {
     // Short-circuit for logical operators
     if (node->op == "or") {
@@ -1033,138 +1008,19 @@ ToValuePtr Interpreter::evalBinaryExpr(ASTNodePtr node, EnvPtr env) {
     }
 
     auto right = eval(node->right, env);
-
-    // Operator overloading: if left is an instance and has a matching method, call it
-    if (left->type == ToValue::Type::INSTANCE) {
-        std::string methodName;
-        bool invertResult = false;
-        if (node->op == "+") methodName = "plus";
-        else if (node->op == "-") methodName = "minus";
-        else if (node->op == "*") methodName = "times";
-        else if (node->op == "/") methodName = "divide";
-        else if (node->op == "%") methodName = "mod";
-        else if (node->op == "==") methodName = "equals";
-        else if (node->op == "!=") { methodName = "equals"; invertResult = true; }
-        else if (node->op == "<") methodName = "less_than";
-        else if (node->op == "<=") methodName = "less_equal";
-        else if (node->op == ">") methodName = "greater_than";
-        else if (node->op == ">=") methodName = "greater_equal";
-
-        if (!methodName.empty()) {
-            auto& inst = left->instanceVal;
-            // Check if class has this method
-            for (auto& m : inst->klass->methods) {
-                if (m.name == methodName) {
-                    // Build a call expression
-                    auto callNode = std::make_shared<ASTNode>();
-                    callNode->type = NodeType::CallExpr;
-                    callNode->line = node->line;
-                    auto memberAccess = std::make_shared<ASTNode>();
-                    memberAccess->type = NodeType::MemberAccess;
-                    memberAccess->object = node->left;
-                    memberAccess->member = methodName;
-                    memberAccess->line = node->line;
-                    callNode->callee = memberAccess;
-                    callNode->arguments.push_back(node->right);
-                    auto result = eval(callNode, env);
-                    if (invertResult && result->type == ToValue::Type::BOOL) {
-                        return ToValue::makeBool(!result->boolVal);
-                    }
-                    return result;
-                }
-            }
-        }
+    // The operator tag is resolved once per node, not once per evaluation.
+    if (node->binOpId < 0) {
+        BinOp tag = binOpFor(node->op);
+        if (tag == BinOp::Unknown)
+            throw ToRuntimeError("Unsupported operation '" + node->op + "' between " +
+                left->typeName() + " and " + right->typeName(), node->line);
+        node->binOpId = (int8_t)tag;
     }
-
-    // String concatenation
-    if (node->op == "+" && (left->type == ToValue::Type::STRING || right->type == ToValue::Type::STRING)) {
-        return ToValue::makeString(left->toString() + right->toString());
-    }
-
-    // Numeric operations
-    if ((left->type == ToValue::Type::INT || left->type == ToValue::Type::FLOAT) &&
-        (right->type == ToValue::Type::INT || right->type == ToValue::Type::FLOAT)) {
-
-        bool useFloat = left->type == ToValue::Type::FLOAT || right->type == ToValue::Type::FLOAT;
-        double lv = left->type == ToValue::Type::INT ? (double)left->intVal : left->floatVal;
-        double rv = right->type == ToValue::Type::INT ? (double)right->intVal : right->floatVal;
-
-        if (node->op == "+") {
-            if (!useFloat) return ToValue::makeInt(left->intVal + right->intVal);
-            return ToValue::makeFloat(lv + rv);
-        }
-        if (node->op == "-") {
-            if (!useFloat) return ToValue::makeInt(left->intVal - right->intVal);
-            return ToValue::makeFloat(lv - rv);
-        }
-        if (node->op == "*") {
-            if (!useFloat) return ToValue::makeInt(left->intVal * right->intVal);
-            return ToValue::makeFloat(lv * rv);
-        }
-        if (node->op == "/") {
-            if (rv == 0) throw ToRuntimeError("Division by zero", node->line);
-            if (!useFloat && left->intVal % right->intVal == 0)
-                return ToValue::makeInt(left->intVal / right->intVal);
-            return ToValue::makeFloat(lv / rv);
-        }
-        if (node->op == "%") {
-            if (right->intVal == 0) throw ToRuntimeError("Modulo by zero", node->line);
-            if (!useFloat) return ToValue::makeInt(left->intVal % right->intVal);
-            return ToValue::makeFloat(std::fmod(lv, rv));
-        }
-
-        // Comparisons
-        if (node->op == "==") return ToValue::makeBool(lv == rv);
-        if (node->op == "!=") return ToValue::makeBool(lv != rv);
-        if (node->op == "<") return ToValue::makeBool(lv < rv);
-        if (node->op == "<=") return ToValue::makeBool(lv <= rv);
-        if (node->op == ">") return ToValue::makeBool(lv > rv);
-        if (node->op == ">=") return ToValue::makeBool(lv >= rv);
-    }
-
-    // Equality for non-numeric types
-    if (node->op == "==") {
-        if (left->type != right->type) return ToValue::makeBool(false);
-        switch (left->type) {
-            case ToValue::Type::STRING: return ToValue::makeBool(left->strVal == right->strVal);
-            case ToValue::Type::BOOL: return ToValue::makeBool(left->boolVal == right->boolVal);
-            case ToValue::Type::NONE: return ToValue::makeBool(true);
-            default: return ToValue::makeBool(false);
-        }
-    }
-    if (node->op == "!=") {
-        if (left->type != right->type) return ToValue::makeBool(true);
-        switch (left->type) {
-            case ToValue::Type::STRING: return ToValue::makeBool(left->strVal != right->strVal);
-            case ToValue::Type::BOOL: return ToValue::makeBool(left->boolVal != right->boolVal);
-            case ToValue::Type::NONE: return ToValue::makeBool(false);
-            default: return ToValue::makeBool(true);
-        }
-    }
-
-    // String comparison
-    if (left->type == ToValue::Type::STRING && right->type == ToValue::Type::STRING) {
-        if (node->op == "<") return ToValue::makeBool(left->strVal < right->strVal);
-        if (node->op == "<=") return ToValue::makeBool(left->strVal <= right->strVal);
-        if (node->op == ">") return ToValue::makeBool(left->strVal > right->strVal);
-        if (node->op == ">=") return ToValue::makeBool(left->strVal >= right->strVal);
-    }
-
-    throw ToRuntimeError("Unsupported operation '" + node->op + "' between " +
-        left->typeName() + " and " + right->typeName(), node->line);
+    return applyBinaryOp((BinOp)node->binOpId, left, right, this, node->line);
 }
 
 ToValuePtr Interpreter::evalUnaryExpr(ASTNodePtr node, EnvPtr env) {
-    auto operand = eval(node->operand, env);
-    if (node->op == "-") {
-        if (operand->type == ToValue::Type::INT) return ToValue::makeInt(-operand->intVal);
-        if (operand->type == ToValue::Type::FLOAT) return ToValue::makeFloat(-operand->floatVal);
-        throw ToRuntimeError("Cannot negate " + operand->typeName(), node->line);
-    }
-    if (node->op == "not") {
-        return ToValue::makeBool(!operand->isTruthy());
-    }
-    throw ToRuntimeError("Unknown unary operator: " + node->op, node->line);
+    return applyUnaryOp(node->op, eval(node->operand, env), node->line);
 }
 
 ToValuePtr Interpreter::evalCallExpr(ASTNodePtr node, EnvPtr env) {
@@ -1193,7 +1049,7 @@ ToValuePtr Interpreter::evalCallExpr(ASTNodePtr node, EnvPtr env) {
                 std::vector<ToValuePtr> all;
                 while (true) {
                     auto v = nextGeneratorValue(obj);
-                    if (v->type == ToValue::Type::NONE && *obj->generatorVal->done) break;
+                    if (v->type == ToValue::Type::NONE && obj->generatorVal->state->done) break;
                     all.push_back(v);
                 }
                 return ToValue::makeList(std::move(all));
@@ -1201,62 +1057,32 @@ ToValuePtr Interpreter::evalCallExpr(ASTNodePtr node, EnvPtr env) {
             throw ToRuntimeError("Generator has no method '" + method + "'");
         }
 
-        // List methods
-        if (obj->type == ToValue::Type::LIST) {
-            return callListMethod(obj, method, args);
-        }
-        // String methods
-        if (obj->type == ToValue::Type::STRING) {
-            return callStringMethod(obj, method, args);
-        }
-        // Dict methods
+        // A dict entry that holds a function shadows the built-in methods —
+        // this is how modules like `math` and `web` expose their members.
         if (obj->type == ToValue::Type::DICT) {
-            // Check if the member is a callable
-            for (auto& pair : obj->dictVal) {
-                if (pair.first == method) {
-                    if (pair.second->type == ToValue::Type::BUILTIN) {
-                        return pair.second->builtinVal(args);
-                    }
-                    if (pair.second->type == ToValue::Type::FUNCTION) {
-                        return callFunction(pair.second, args, node->line);
-                    }
-                }
+            auto member = obj->dictVal.get(method);
+            if (member) {
+                if (member->type == ToValue::Type::BUILTIN) return member->builtinVal(args);
+                if (member->type == ToValue::Type::FUNCTION) return callFunction(member, args, node->line);
             }
-            return callDictMethod(obj, method, args);
+        }
+        // Built-in methods on lists, tuples, dicts, sets, deques, queues,
+        // stacks, heaps and strings — shared with the bytecode VM.
+        if (obj->type != ToValue::Type::INSTANCE && obj->type != ToValue::Type::CLASS) {
+            return callBuiltinMethod(obj, method, args, this, node->line);
         }
         // Instance methods
         if (obj->type == ToValue::Type::INSTANCE) {
-            auto& inst = obj->instanceVal;
-            // Look up method in class
-            for (auto& m : inst->klass->methods) {
-                if (m.name == method) {
-                    auto methodEnv = inst->klass->closure->createChild();
-                    methodEnv->define("my", obj);
-                    // Bind params
-                    if (args.size() != m.params.size()) {
-                        throw ToRuntimeError("Method '" + method + "' expects " +
-                            std::to_string(m.params.size()) + " arguments, got " +
-                            std::to_string(args.size()), node->line);
-                    }
-                    for (size_t i = 0; i < m.params.size(); i++) {
-                        methodEnv->define(m.params[i], args[i]);
-                    }
-                    try {
-                        for (auto& stmt : m.body) {
-                            execStatement(stmt, methodEnv);
-                        }
-                    } catch (ReturnException& e) {
-                        return e.value;
-                    }
-                    return ToValue::makeNone();
-                }
-            }
+            bool found = false;
+            auto result = callInstanceMethod(obj, method, args, node->line, &found);
+            if (found) return result;
             // Check fields (might be a function stored in instance)
-            auto it = inst->fields.find(method);
-            if (it != inst->fields.end()) {
+            auto it = obj->instanceVal->fields.find(method);
+            if (it != obj->instanceVal->fields.end()) {
                 return callFunction(it->second, args, node->line);
             }
-            throw ToRuntimeError("'" + inst->klass->name + "' has no method '" + method + "'", node->line);
+            throw ToRuntimeError("'" + obj->instanceVal->klass->name + "' has no method '" +
+                                 method + "'", node->line);
         }
         throw ToRuntimeError("Cannot call method on " + obj->typeName(), node->line);
     }
@@ -1421,23 +1247,12 @@ ToValuePtr Interpreter::evalMemberAccess(ASTNodePtr node, EnvPtr env) {
             "' instance has no field '" + node->member + "'", node->line);
     }
 
-    // Dict access
-    if (obj->type == ToValue::Type::DICT) {
-        for (auto& pair : obj->dictVal) {
-            if (pair.first == node->member) return pair.second;
-        }
+    // Dict entries and the built-in properties (.length and friends).
+    auto prop = getBuiltinProperty(obj, node->member);
+    if (prop) return prop;
+
+    if (obj->type == ToValue::Type::DICT)
         throw ToRuntimeError("Dictionary has no key '" + node->member + "'", node->line);
-    }
-
-    // List property access
-    if (obj->type == ToValue::Type::LIST) {
-        if (node->member == "length") return ToValue::makeInt(obj->listVal.size());
-    }
-
-    // String property access
-    if (obj->type == ToValue::Type::STRING) {
-        if (node->member == "length") return ToValue::makeInt(obj->strVal.size());
-    }
 
     throw ToRuntimeError("Cannot access member '" + node->member + "' on " + obj->typeName(), node->line);
 }
@@ -1445,67 +1260,22 @@ ToValuePtr Interpreter::evalMemberAccess(ASTNodePtr node, EnvPtr env) {
 ToValuePtr Interpreter::evalIndexExpr(ASTNodePtr node, EnvPtr env) {
     auto obj = eval(node->object, env);
 
-    // Check for slice syntax: obj[start..end]
-    bool isSlice = (node->indexExpr->type == NodeType::BinaryExpr && node->indexExpr->op == "..");
-    if (isSlice) {
-        auto startVal = eval(node->indexExpr->left, env);
-        auto endVal = eval(node->indexExpr->right, env);
-        if (startVal->type != ToValue::Type::INT || endVal->type != ToValue::Type::INT)
-            throw ToRuntimeError("Slice bounds must be integers", node->line);
-        int64_t s = startVal->intVal, e = endVal->intVal;
-
-        if (obj->type == ToValue::Type::STRING) {
-            int64_t len = obj->strVal.size();
-            if (s < 0) s += len;
-            if (e < 0) e += len;
-            if (s < 0) s = 0;
-            if (e > len) e = len;
-            if (s >= e) return ToValue::makeString("");
-            return ToValue::makeString(obj->strVal.substr(s, e - s));
-        }
-        if (obj->type == ToValue::Type::LIST) {
-            int64_t len = obj->listVal.size();
-            if (s < 0) s += len;
-            if (e < 0) e += len;
-            if (s < 0) s = 0;
-            if (e > len) e = len;
-            std::vector<ToValuePtr> slice;
-            for (int64_t i = s; i < e; i++) slice.push_back(obj->listVal[i]);
-            return ToValue::makeList(std::move(slice));
-        }
-        throw ToRuntimeError("Cannot slice " + obj->typeName(), node->line);
+    // xs[a:b:c]
+    if (node->type == NodeType::SliceExpr) {
+        auto start = node->rangeStart ? eval(node->rangeStart, env) : nullptr;
+        auto end = node->rangeEnd ? eval(node->rangeEnd, env) : nullptr;
+        auto step = node->indexExpr ? eval(node->indexExpr, env) : nullptr;
+        return sliceValue(obj, start, end, step, node->line);
     }
 
-    auto idx = eval(node->indexExpr, env);
-
-    if (obj->type == ToValue::Type::LIST) {
-        if (idx->type != ToValue::Type::INT)
-            throw ToRuntimeError("List index must be an integer", node->line);
-        int64_t i = idx->intVal;
-        if (i < 0) i += obj->listVal.size();
-        if (i < 0 || i >= (int64_t)obj->listVal.size())
-            throw ToRuntimeError("Index out of bounds: " + std::to_string(idx->intVal), node->line);
-        return obj->listVal[i];
-    }
-    if (obj->type == ToValue::Type::STRING) {
-        if (idx->type != ToValue::Type::INT)
-            throw ToRuntimeError("String index must be an integer", node->line);
-        int64_t i = idx->intVal;
-        if (i < 0) i += obj->strVal.size();
-        if (i < 0 || i >= (int64_t)obj->strVal.size())
-            throw ToRuntimeError("Index out of bounds", node->line);
-        return ToValue::makeString(std::string(1, obj->strVal[i]));
-    }
-    if (obj->type == ToValue::Type::DICT) {
-        if (idx->type != ToValue::Type::STRING)
-            throw ToRuntimeError("Dict key must be a string", node->line);
-        for (auto& pair : obj->dictVal) {
-            if (pair.first == idx->strVal) return pair.second;
-        }
-        throw ToRuntimeError("Key not found: '" + idx->strVal + "'", node->line);
+    // xs[a..b] — the older range form, kept working
+    if (node->indexExpr->type == NodeType::BinaryExpr && node->indexExpr->op == "..") {
+        auto start = eval(node->indexExpr->left, env);
+        auto end = eval(node->indexExpr->right, env);
+        return sliceValue(obj, start, end, nullptr, node->line);
     }
 
-    throw ToRuntimeError("Cannot index " + obj->typeName(), node->line);
+    return indexGet(obj, eval(node->indexExpr, env), node->line);
 }
 
 ToValuePtr Interpreter::evalStringInterp(ASTNodePtr node, EnvPtr env) {
@@ -1526,9 +1296,12 @@ ToValuePtr Interpreter::evalListLiteral(ASTNodePtr node, EnvPtr env) {
 }
 
 ToValuePtr Interpreter::evalDictLiteral(ASTNodePtr node, EnvPtr env) {
-    std::vector<std::pair<std::string, ToValuePtr>> entries;
+    ToDict entries;
+    entries.reserve(node->entries.size());
     for (auto& entry : node->entries) {
-        entries.push_back({entry.key, eval(entry.value, env)});
+        auto value = eval(entry.value, env);
+        if (entry.keyExpr) entries.setKey(eval(entry.keyExpr, env), std::move(value));
+        else entries.set(entry.key, std::move(value));
     }
     return ToValue::makeDict(std::move(entries));
 }
@@ -1549,152 +1322,6 @@ ToValuePtr Interpreter::evalRangeLiteral(ASTNodePtr node, EnvPtr env) {
 // Built-in methods on types
 // ========================
 
-ToValuePtr Interpreter::callListMethod(ToValuePtr list, const std::string& method, const std::vector<ToValuePtr>& args) {
-    if (method == "add") {
-        if (args.size() != 1) throw ToRuntimeError("list.add() takes exactly 1 argument");
-        list->listVal.push_back(args[0]);
-        return ToValue::makeNone();
-    }
-    if (method == "remove") {
-        if (args.size() != 1) throw ToRuntimeError("list.remove() takes exactly 1 argument");
-        if (args[0]->type != ToValue::Type::INT)
-            throw ToRuntimeError("list.remove() index must be an integer");
-        int64_t idx = args[0]->intVal;
-        if (idx < 0) idx += list->listVal.size();
-        if (idx < 0 || idx >= (int64_t)list->listVal.size())
-            throw ToRuntimeError("list.remove() index out of bounds");
-        list->listVal.erase(list->listVal.begin() + idx);
-        return ToValue::makeNone();
-    }
-    if (method == "pop") {
-        if (list->listVal.empty()) throw ToRuntimeError("pop from empty list");
-        auto val = list->listVal.back();
-        list->listVal.pop_back();
-        return val;
-    }
-    if (method == "contains") {
-        if (args.size() != 1) throw ToRuntimeError("list.contains() takes exactly 1 argument");
-        for (auto& item : list->listVal) {
-            if (item->type == args[0]->type) {
-                bool match = false;
-                switch (item->type) {
-                    case ToValue::Type::INT: match = item->intVal == args[0]->intVal; break;
-                    case ToValue::Type::STRING: match = item->strVal == args[0]->strVal; break;
-                    case ToValue::Type::BOOL: match = item->boolVal == args[0]->boolVal; break;
-                    default: break;
-                }
-                if (match) return ToValue::makeBool(true);
-            }
-        }
-        return ToValue::makeBool(false);
-    }
-    if (method == "join") {
-        std::string sep = "";
-        if (!args.empty() && args[0]->type == ToValue::Type::STRING) sep = args[0]->strVal;
-        std::string result;
-        for (size_t i = 0; i < list->listVal.size(); i++) {
-            if (i > 0) result += sep;
-            result += list->listVal[i]->toString();
-        }
-        return ToValue::makeString(result);
-    }
-    if (method == "reverse") {
-        std::reverse(list->listVal.begin(), list->listVal.end());
-        return ToValue::makeNone();
-    }
-    throw ToRuntimeError("List has no method '" + method + "'");
-}
-
-ToValuePtr Interpreter::callStringMethod(ToValuePtr str, const std::string& method, const std::vector<ToValuePtr>& args) {
-    if (method == "upper") {
-        std::string result = str->strVal;
-        for (auto& c : result) c = toupper(c);
-        return ToValue::makeString(result);
-    }
-    if (method == "lower") {
-        std::string result = str->strVal;
-        for (auto& c : result) c = tolower(c);
-        return ToValue::makeString(result);
-    }
-    if (method == "trim") {
-        std::string s = str->strVal;
-        s.erase(0, s.find_first_not_of(" \t\n\r"));
-        s.erase(s.find_last_not_of(" \t\n\r") + 1);
-        return ToValue::makeString(s);
-    }
-    if (method == "split") {
-        std::string sep = " ";
-        if (!args.empty() && args[0]->type == ToValue::Type::STRING) sep = args[0]->strVal;
-        std::vector<ToValuePtr> parts;
-        std::string s = str->strVal;
-        size_t start = 0;
-        size_t pos;
-        while ((pos = s.find(sep, start)) != std::string::npos) {
-            parts.push_back(ToValue::makeString(s.substr(start, pos - start)));
-            start = pos + sep.size();
-        }
-        parts.push_back(ToValue::makeString(s.substr(start)));
-        return ToValue::makeList(std::move(parts));
-    }
-    if (method == "contains") {
-        if (args.size() != 1 || args[0]->type != ToValue::Type::STRING)
-            throw ToRuntimeError("string.contains() takes exactly 1 string argument");
-        return ToValue::makeBool(str->strVal.find(args[0]->strVal) != std::string::npos);
-    }
-    if (method == "replace") {
-        if (args.size() != 2 || args[0]->type != ToValue::Type::STRING || args[1]->type != ToValue::Type::STRING)
-            throw ToRuntimeError("string.replace() takes 2 string arguments");
-        std::string result = str->strVal;
-        std::string from = args[0]->strVal;
-        std::string to = args[1]->strVal;
-        size_t pos = 0;
-        while ((pos = result.find(from, pos)) != std::string::npos) {
-            result.replace(pos, from.length(), to);
-            pos += to.length();
-        }
-        return ToValue::makeString(result);
-    }
-    if (method == "starts_with") {
-        if (args.size() != 1 || args[0]->type != ToValue::Type::STRING)
-            throw ToRuntimeError("string.starts_with() takes 1 string argument");
-        return ToValue::makeBool(str->strVal.find(args[0]->strVal) == 0);
-    }
-    if (method == "ends_with") {
-        if (args.size() != 1 || args[0]->type != ToValue::Type::STRING)
-            throw ToRuntimeError("string.ends_with() takes 1 string argument");
-        auto& s = str->strVal;
-        auto& suffix = args[0]->strVal;
-        if (suffix.size() > s.size()) return ToValue::makeBool(false);
-        return ToValue::makeBool(s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0);
-    }
-    throw ToRuntimeError("String has no method '" + method + "'");
-}
-
-ToValuePtr Interpreter::callDictMethod(ToValuePtr dict, const std::string& method, const std::vector<ToValuePtr>& args) {
-    if (method == "keys") {
-        std::vector<ToValuePtr> keys;
-        for (auto& pair : dict->dictVal) {
-            keys.push_back(ToValue::makeString(pair.first));
-        }
-        return ToValue::makeList(std::move(keys));
-    }
-    if (method == "values") {
-        std::vector<ToValuePtr> values;
-        for (auto& pair : dict->dictVal) {
-            values.push_back(pair.second);
-        }
-        return ToValue::makeList(std::move(values));
-    }
-    if (method == "has") {
-        if (args.size() != 1 || args[0]->type != ToValue::Type::STRING)
-            throw ToRuntimeError("dict.has() takes exactly 1 string argument");
-        for (auto& pair : dict->dictVal) {
-            if (pair.first == args[0]->strVal) return ToValue::makeBool(true);
-        }
-        return ToValue::makeBool(false);
-    }
-    throw ToRuntimeError("Dict has no method '" + method + "'");
-}
 
 // ========================
 // Web Module
@@ -1864,7 +1491,7 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
                         if (!match) continue;
 
                         // Add path params to request
-                        for (auto& [k, v] : req->dictVal) {
+                        for (auto& [k, v, kv_] : req->dictVal) {
                             if (k == "params") {
                                 for (auto& p : params) v->dictVal.push_back(p);
                                 break;
@@ -2104,7 +1731,7 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
             if (args.size() < 2) throw ToRuntimeError("web.cookie() takes 2-3 arguments (name, value, options?)");
             std::string cookie = args[0]->strVal + "=" + args[1]->strVal;
             if (args.size() >= 3 && args[2]->type == ToValue::Type::DICT) {
-                for (auto& [k, v] : args[2]->dictVal) {
+                for (auto& [k, v, kv_] : args[2]->dictVal) {
                     if (k == "path") cookie += "; Path=" + v->strVal;
                     else if (k == "max_age") cookie += "; Max-Age=" + std::to_string(v->intVal);
                     else if (k == "http_only" && v->boolVal) cookie += "; HttpOnly";
@@ -2194,7 +1821,7 @@ void Interpreter::registerWebModule(EnvPtr env, Interpreter* interp) {
             if (data->type != ToValue::Type::DICT) throw ToRuntimeError("web.template() data must be a dict");
 
             // Replace {{ key }} patterns
-            for (auto& [key, val] : data->dictVal) {
+            for (auto& [key, val, keyObj_] : data->dictVal) {
                 std::string placeholder = "{{ " + key + " }}";
                 std::string placeholder2 = "{{" + key + "}}";
                 std::string replacement = val->toString();
@@ -2246,25 +1873,21 @@ void Interpreter::registerJsonModule(EnvPtr env) {
 
 ToValuePtr Interpreter::createGenerator(std::shared_ptr<ToFunction> func, const std::vector<ToValuePtr>& args) {
     auto gen = std::make_shared<ToGenerator>();
-    gen->mtx = std::make_shared<std::mutex>();
-    gen->cv = std::make_shared<std::condition_variable>();
-    gen->currentValue = std::make_shared<std::shared_ptr<ToValue>>(nullptr);
-    gen->hasValue = std::make_shared<std::atomic<bool>>(false);
-    gen->consumerReady = std::make_shared<std::atomic<bool>>(false);
-    gen->done = std::make_shared<std::atomic<bool>>(false);
-    gen->error = std::make_shared<std::string>("");
+    auto state = gen->state;
 
     Interpreter* self = this;
-    gen->thread = std::make_shared<std::thread>([self, gen, func, args]() {
-        currentGenerator = gen;
+    // The thread captures the handshake state only — never the generator —
+    // so the generator stays owned by the program that created it.
+    gen->thread = std::make_shared<std::thread>([self, state, func, args]() {
+        currentGenerator = state;
 
         try {
             // Wait for first call to next()
             {
-                std::unique_lock<std::mutex> lock(*gen->mtx);
-                gen->cv->wait(lock, [&gen]() { return (bool)*gen->consumerReady || (bool)*gen->done; });
+                std::unique_lock<std::mutex> lock(state->mtx);
+                state->cv.wait(lock, [&state]() { return (bool)state->consumerReady || (bool)state->done; });
             }
-            if (*gen->done) {
+            if (state->done) {
                 currentGenerator = nullptr;
                 return;
             }
@@ -2272,7 +1895,7 @@ ToValuePtr Interpreter::createGenerator(std::shared_ptr<ToFunction> func, const 
             // Create function environment
             auto funcEnv = func->closure->createChild();
             if (args.size() != func->params.size()) {
-                *gen->error = "Generator expects " + std::to_string(func->params.size()) +
+                state->error = "Generator expects " + std::to_string(func->params.size()) +
                     " arguments, got " + std::to_string(args.size());
             } else {
                 for (size_t i = 0; i < func->params.size(); i++) {
@@ -2285,22 +1908,22 @@ ToValuePtr Interpreter::createGenerator(std::shared_ptr<ToFunction> func, const 
                 } catch (ReturnException&) {
                     // generator returned early
                 } catch (ToRuntimeError& e) {
-                    *gen->error = e.detail;
+                    state->error = e.detail;
                 } catch (std::exception& e) {
-                    *gen->error = e.what();
+                    state->error = e.what();
                 }
             }
         } catch (...) {
-            *gen->error = "unknown error in generator";
+            state->error = "unknown error in generator";
         }
 
         // Signal completion
         {
-            std::unique_lock<std::mutex> lock(*gen->mtx);
-            *gen->done = true;
-            *gen->hasValue = false;
+            std::unique_lock<std::mutex> lock(state->mtx);
+            state->done = true;
+            state->hasValue = false;
         }
-        gen->cv->notify_all();
+        state->cv.notify_all();
         currentGenerator = nullptr;
     });
 
@@ -2308,33 +1931,33 @@ ToValuePtr Interpreter::createGenerator(std::shared_ptr<ToFunction> func, const 
 }
 
 ToValuePtr Interpreter::nextGeneratorValue(ToValuePtr genVal) {
-    auto& gen = genVal->generatorVal;
-    if (*gen->done) return ToValue::makeNone();
+    auto state = genVal->generatorVal->state;
+    if (state->done) return ToValue::makeNone();
 
     // Signal producer to continue
     {
-        std::unique_lock<std::mutex> lock(*gen->mtx);
-        *gen->hasValue = false;
-        *gen->consumerReady = true;
+        std::unique_lock<std::mutex> lock(state->mtx);
+        state->hasValue = false;
+        state->consumerReady = true;
     }
-    gen->cv->notify_all();
+    state->cv.notify_all();
 
     // Wait for a value or done
     ToValuePtr val;
     {
-        std::unique_lock<std::mutex> lock(*gen->mtx);
-        gen->cv->wait(lock, [&gen]() { return (bool)*gen->hasValue || (bool)*gen->done; });
-        if (*gen->hasValue) {
-            val = *gen->currentValue;
+        std::unique_lock<std::mutex> lock(state->mtx);
+        state->cv.wait(lock, [&state]() { return (bool)state->hasValue || (bool)state->done; });
+        if (state->hasValue) {
+            val = state->currentValue;
         } else {
             val = ToValue::makeNone();
         }
     }
 
     // Check for errors from the producer
-    if (!gen->error->empty()) {
-        std::string err = *gen->error;
-        *gen->error = "";
+    if (!state->error.empty()) {
+        std::string err = state->error;
+        state->error = "";
         throw ToRuntimeError(err);
     }
 

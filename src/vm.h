@@ -2,6 +2,7 @@
 #include "environment.h"
 #include <vector>
 #include <string>
+#include <memory>
 #include <unordered_map>
 #include <cstdint>
 
@@ -10,93 +11,102 @@
 // ========================
 
 enum class OpCode : uint8_t {
-    // Stack ops
-    CONST,          // push constant from pool
-    POP,            // discard top of stack
+    // Stack
+    CONST,          // push constants[arg]
+    POP,            // discard top
     DUP,            // duplicate top
+    DUP2,           // duplicate the top two:  [a, b] -> [a, b, a, b]
 
     // Variables
-    LOAD,           // push variable value (index into names)
-    STORE,          // pop value, store in variable
-    LOAD_CONST_VAR, // load a const variable
-    STORE_CONST,    // define a const variable
+    LOAD,           // push the value of names[arg]
+    STORE,          // pop and assign names[arg]
+    STORE_CONST,    // pop and define names[arg] as a constant
 
-    // Arithmetic
-    ADD, SUB, MUL, DIV, MOD, NEG,
-
-    // Comparison
+    // Arithmetic and comparison — all routed through applyBinaryOp
+    ADD, SUB, MUL, DIV, MOD, NEG, NOT,
     EQ, NEQ, LT, LTE, GT, GTE,
 
-    // Logical
-    AND, OR, NOT,
-
-    // String
-    CONCAT,         // string concatenation for interpolation
+    CONCAT,         // string interpolation: join two values as text
 
     // Control flow
-    JUMP,           // unconditional jump (16-bit offset)
-    JUMP_IF_FALSE,  // pop, jump if falsy
-    JUMP_IF_TRUE,   // pop, jump if truthy
-    LOOP,           // backward jump
+    JUMP,               // unconditional
+    JUMP_IF_FALSE,      // pop, jump when falsy
+    JUMP_IF_FALSE_KEEP, // peek, jump when falsy, leave the value  (for `and`)
+    JUMP_IF_TRUE_KEEP,  // peek, jump when truthy, leave the value (for `or`)
+    LOOP,               // backward jump
 
-    // Functions
-    CALL,           // call function (arg count follows)
-    RETURN,         // return from function
-    MAKE_FUNCTION,  // create function from code object
+    // Calls
+    CALL,            // call a value:   [callee, args...] -> result
+    CALL_METHOD,     // call a method:  [receiver, args...] -> result
+    CALL_METHOD_OPT, // same, but `receiver?.m()` yields none for a none receiver
+    TAIL_CALL,       // self-recursive tail call: reuse the current frame
+    RETURN,
 
-    // Lists & Dicts
-    MAKE_LIST,      // create list (count follows)
-    MAKE_DICT,      // create dict (count follows, key-value pairs)
-    INDEX_GET,      // obj[index]
-    INDEX_SET,      // obj[index] = value
+    // Scopes — a `through` loop gives each iteration its own scope so a
+    // closure made inside the body captures that iteration's value.
+    SCOPE_BEGIN,
+    SCOPE_TRUNC,    // drop scopes back down to depth arg
 
-    // Member access
-    GET_MEMBER,     // obj.member (name index follows)
-    SET_MEMBER,     // obj.member = value
-    GET_MEMBER_OPT, // obj?.member (optional chaining)
+    // Constructors
+    MAKE_LIST, MAKE_TUPLE, MAKE_SET, MAKE_DICT, MAKE_RANGE,
 
-    // Classes
-    MAKE_CLASS,     // create class (name, method count)
-    MAKE_INSTANCE,  // instantiate class (arg count follows)
+    // Access
+    INDEX_GET, INDEX_SET,
+    SLICE,          // [obj, start, end, step] -> slice
+    GET_MEMBER, GET_MEMBER_OPT, SET_MEMBER,
 
     // Iteration
-    GET_ITER,       // get iterator from iterable
-    ITER_NEXT,      // get next value, push (pushes sentinel on done)
-    MAKE_RANGE,     // create range from two ints
+    GET_ITER,       // [iterable] -> iterator
+    ITER_NEXT,      // [iterator] -> [value, true] | [false]
 
-    // Built-in ops
-    PRINT,          // print top of stack
+    // Statements
+    PRINT,
+    ASSERT,
 
-    // Special
-    NONE,           // push none
-    TRUE_,          // push true
-    FALSE_,         // push false
+    // Constants
+    NONE, TRUE_, FALSE_,
 
-    HALT,           // end of program
+    // Hand a subtree to the tree-walking interpreter. Used for the parts of
+    // the language that are declarative or rare enough that compiling them
+    // would add risk without adding speed — classes, try/catch, imports,
+    // pattern matching, generators, decorators, async.
+    EXEC_AST,       // run a statement in the current scope
+    EVAL_AST,       // evaluate an expression in the current scope, push it
+
+    HALT,
+};
+
+// A statement handed to the tree-walker, plus where to resume if that
+// statement breaks or continues the loop it sits in.
+struct AstSlot {
+    ASTNodePtr node;
+    int breakTarget = -1;    // byte offset, or -1 to let the signal escape
+    int continueTarget = -1;
 };
 
 // ========================
-// Chunk — a sequence of bytecodes + constants
+// Chunk — bytecode plus everything it refers to
 // ========================
 
 struct Chunk {
     std::vector<uint8_t> code;
-    std::vector<ToValuePtr> constants;     // constant pool
-    std::vector<std::string> names;        // variable/member names
-    std::vector<int> lines;                // source line per instruction
+    std::vector<ToValuePtr> constants;
+    std::vector<std::string> names;
+    std::vector<int> lines;          // source line per byte, for error messages
+    std::vector<AstSlot> asts;
 
-    // Emit helpers
     size_t emit(OpCode op, int line);
     size_t emitWithArg(OpCode op, uint16_t arg, int line);
-    size_t emitJump(OpCode op, int line);  // returns offset to patch later
+    size_t emitJump(OpCode op, int line);   // returns the offset to patch
     void patchJump(size_t offset);
+    void patchJumpTo(size_t offset, size_t target);
     void emitLoop(size_t loopStart, int line);
 
-    // Add a constant, return its index
     uint16_t addConstant(ToValuePtr val);
     uint16_t addName(const std::string& name);
+    uint16_t addAst(ASTNodePtr node);
 
-    // Debug
+    int lineAt(size_t offset) const { return offset < lines.size() ? lines[offset] : 0; }
     void disassemble(const std::string& name) const;
 };
 
@@ -108,67 +118,79 @@ class Compiler {
 public:
     Compiler();
 
-    Chunk compile(ASTNodePtr program, bool isTopLevel = true);
+    // `selfName` enables tail-call optimisation for a function compiling its
+    // own body; leave it empty at the top level.
+    Chunk compile(ASTNodePtr program, bool isTopLevel = true,
+                  const std::string& selfName = "", size_t selfArity = 0);
 
 private:
     Chunk* currentChunk;
     Chunk mainChunk;
+    std::string selfName;
+    size_t selfArity = 0;
 
-    // Loop tracking for break/continue
     struct LoopInfo {
         size_t loopStart;
         std::vector<size_t> breakJumps;
+        std::vector<size_t> continueJumps;
+        std::vector<uint16_t> astSlots;  // EXEC_AST slots that may break/continue us
+        uint16_t scopeDepth = 0;         // scope nesting outside this loop's body
     };
     std::vector<LoopInfo> loopStack;
+    uint16_t scopeDepth = 0;
 
-    void compileNode(ASTNodePtr node);
     void compileStatement(ASTNodePtr node);
     void compileExpression(ASTNodePtr node);
     void compileBlock(const std::vector<ASTNodePtr>& stmts);
+    void compileAssignment(ASTNodePtr node);
+    void compileCall(ASTNodePtr node);
+    // Emit EXEC_AST/EVAL_AST for a subtree the compiler does not handle.
+    void deferToInterpreter(ASTNodePtr node, bool isStatement);
+    bool isTailCall(ASTNodePtr node) const;
 };
 
 // ========================
-// VM — executes bytecode
+// VM
 // ========================
 
-// Call frame for the VM
 struct CallFrame {
     Chunk* chunk;
     size_t ip;
-    size_t stackBase; // stack offset for this frame's locals
-    EnvPtr env;       // variable scope for this frame
+    size_t stackBase;                  // where this frame's result belongs
+    EnvPtr env;
+    std::shared_ptr<ToFunction> func;  // set for function frames, for tail calls
+    std::vector<EnvPtr> scopes;        // enclosing scopes, innermost last
 };
 
 class VM {
 public:
     VM();
+    ~VM();
 
     void run(Chunk& chunk);
 
     EnvPtr getGlobalEnv() { return globalEnv; }
 
-    // Compile a function body to a Chunk
-    Chunk compileFunction(std::shared_ptr<ToFunction> func);
-
 private:
-    static constexpr size_t STACK_MAX = 16384;
-    static constexpr size_t FRAMES_MAX = 256;
-    ToValuePtr stack[STACK_MAX];
+    static constexpr size_t STACK_MAX = 65536;
+    static constexpr size_t FRAMES_MAX = 1024;
+
+    std::vector<ToValuePtr> stack;
     size_t stackTop = 0;
 
-    CallFrame frames[FRAMES_MAX];
+    std::vector<CallFrame> frames;
     size_t frameCount = 0;
 
     EnvPtr globalEnv;
     std::shared_ptr<class Interpreter> treeWalker;
 
-    // Cache compiled functions
-    std::unordered_map<std::string, Chunk> functionChunks;
-
     void push(ToValuePtr val);
     ToValuePtr pop();
-    ToValuePtr peek(int offset = 0);
+    ToValuePtr& peek(int offset = 0);
 
-    uint16_t readShort(Chunk& chunk, size_t& ip);
-    void executeFrame(); // run current frame
+    Chunk* chunkFor(const std::shared_ptr<ToFunction>& func);
+    // True when a function must run on the tree-walker to keep its semantics.
+    static bool needsInterpreter(const std::shared_ptr<ToFunction>& func);
+
+    void execute();
 };
