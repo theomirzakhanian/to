@@ -54,7 +54,7 @@ base = {a = 1, b = 2}
 extra = {b = 20, c = 3}
 print base.merge(extra)
 print base
-base.update(extra)
+base = base.merge(extra)
 print base
 
 print base.map_values((v): v * 2)
@@ -77,7 +77,7 @@ print base["a"]
 print "== list methods =="
 xs = [5, 3, 1, 4, 1]
 print xs.length
-print xs.contains(4)
+print xs.has(4)
 print xs.index_of(1)
 print xs.count(1)
 print xs.first()
@@ -85,8 +85,7 @@ print xs.last()
 
 xs.sort()
 print xs
-xs.sort_desc()
-print xs
+print xs.sorted().reversed()
 print xs.sorted()
 print xs.reversed()
 print xs.unique()
@@ -94,18 +93,17 @@ print xs.unique()
 ys = [1, 2, 3]
 ys.insert(0, 0)
 print ys
-ys.push(4)
+ys.add(4)
 print ys
 print ys.pop()
-print ys.pop(0)
+print ys.remove_at(0)
 print ys
-print ys.remove_value(2)
-print ys.remove_value(99)
+print ys.remove(2)
+print ys.remove(99)
 print ys
 
-print [1, 2].concat([3, 4])
 zs = [1, 2]
-zs.extend([3])
+zs.add_all([3, 4])
 print zs
 
 print [1, 2, 3].map((x): x * 10)
@@ -120,8 +118,9 @@ print [1, 2, 3].find((x): x > 1)
 print [[1, 2], [3]].flatten()
 print [1, 2, 3, 4, 5].chunk(2)
 print [1, 2, 3].zip(["a", "b", "c"])
-print [1, 2, 3, 4].take(2)
-print [1, 2, 3, 4].drop(2)
+print [1, 2, 3, 4].first(2)
+print [1, 2, 3, 4].last(2)
+print [1, 2, 3, 4].skip(2)
 print ["a", "b"].join("-")
 
 words = ["pear", "fig", "banana"]
@@ -190,7 +189,7 @@ print "ab".repeat(3)
 print "5".pad_start(3, "0")
 print "5".pad_end(3, "0")
 print "hello".capitalize()
-print "hello".reverse()
+print "hello".reversed()
 print "42".to_int() + 1
 print "3.5".to_float()
 print "hello".chars()

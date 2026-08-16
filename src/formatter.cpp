@@ -15,7 +15,7 @@ std::string Formatter::format(ASTNodePtr program) {
     out.clear();
     indent = 0;
 
-    bool lastWasBlock = false;
+    // Blank lines are added around block definitions as we go.
     for (size_t i = 0; i < program->statements.size(); i++) {
         auto& stmt = program->statements[i];
         // Add blank line before function/class defs (unless at start)
@@ -26,7 +26,6 @@ std::string Formatter::format(ASTNodePtr program) {
         if (isBlock && i > 0) emitBlank();
         formatNode(stmt);
         if (isBlock && i < program->statements.size() - 1) emitBlank();
-        lastWasBlock = isBlock;
     }
 
     std::string result = out.str();

@@ -53,5 +53,13 @@ ToValuePtr applyBinaryOp(const std::string& op, const ToValuePtr& left,
 // `-value` and `not value`.
 ToValuePtr applyUnaryOp(const std::string& op, const ToValuePtr& operand, int line);
 
-// Global constructors: set(), tuple(), deque(), queue(), stack(), heap(), max_heap(), sorted(), ...
+// Global constructors: set(), tuple(), deque(), queue(), stack(), heap(), ...
 void registerCollectionBuiltins(EnvPtr env);
+
+// The message for `recv.name` when no such member exists — a redirect to
+// the word `to` uses, a nudge about the right type, or a spelling guess.
+[[noreturn]] void reportUnknownMember(const ToValuePtr& recv, const std::string& name, int line);
+
+// What `help(value)` prints: the type, and every method it answers to.
+// With no value, prints the whole collection cheat sheet.
+std::string helpText(const ToValuePtr& value);

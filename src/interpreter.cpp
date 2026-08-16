@@ -1252,9 +1252,14 @@ ToValuePtr Interpreter::evalMemberAccess(ASTNodePtr node, EnvPtr env) {
     if (prop) return prop;
 
     if (obj->type == ToValue::Type::DICT)
-        throw ToRuntimeError("Dictionary has no key '" + node->member + "'", node->line);
+        throw ToRuntimeError("This dict has no key '" + node->member +
+                             "' — use get(\"" + node->member + "\", fallback) when it might be missing",
+                             node->line);
 
-    throw ToRuntimeError("Cannot access member '" + node->member + "' on " + obj->typeName(), node->line);
+    // Collections and strings get a message that names the right word.
+    if (obj->length() >= 0) reportUnknownMember(obj, node->member, node->line);
+
+    throw ToRuntimeError("Cannot read '" + node->member + "' on a " + obj->typeName(), node->line);
 }
 
 ToValuePtr Interpreter::evalIndexExpr(ASTNodePtr node, EnvPtr env) {

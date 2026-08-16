@@ -624,13 +624,15 @@ cp -r editor/vscode ~/.vscode/extensions/to-language-0.2.0
 | Comments | `~ line` / `~' block '~` |
 | Ranges | `0..10` |
 | Slicing | `list[1:4]` / `str[0:5]` / `list[::-1]` |
+| Collections | `add` / `pop` / `peek` / `has` / `remove` work on all of them |
 | Tuples | `(1, 2)` — fixed, and usable as a dict key |
 | Sets | `{1, 2, 3}` — unique values, `union`/`intersect`/`difference` |
-| Dict keys | any hashable value: `d[42]`, `d[(1, 2)]` |
-| Deque | `deque()` — `push_front` / `push` / `pop_front` / `pop` |
-| Queue | `queue()` — first in, first out |
-| Stack | `stack()` — last in, first out |
-| Heap | `heap()` / `max_heap()` — smallest (or largest) out first |
+| Dict keys | anything that can't change: `d[42]`, `d[(1, 2)]` |
+| Queue | `queue()` — `pop()` gives the one that waited longest |
+| Stack | `stack()` — `pop()` gives the most recent |
+| Deque | `deque()` — open at both ends: `add_first` / `pop_first` |
+| Heap | `heap()` / `max_heap()` — `pop()` gives the smallest (or largest) |
+| Ask it | `help(x)` — every method that value has, in plain language |
 | Errors | `try: ... catch e: ... finally: ...` |
 | Imports | `use math` / `use greet from "file.to"` |
 

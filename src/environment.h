@@ -47,6 +47,9 @@ size_t valueHash(const ToValuePtr& v);
 
 std::string valueTypeName(const ToValue& v);
 
+// "a list", "an int" — so error messages read as English.
+std::string withArticle(const std::string& typeName);
+
 // ============================================================
 // Dictionary storage
 // ------------------------------------------------------------

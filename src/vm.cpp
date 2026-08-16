@@ -717,8 +717,11 @@ void VM::execute() {
                     auto prop = getBuiltinProperty(obj, name);
                     if (prop) { push(std::move(prop)); break; }
                     if (obj->type == ToValue::Type::DICT)
-                        throw ToRuntimeError("Dictionary has no key '" + name + "'",
-                                             chunk->lineAt(opOffset));
+                        throw ToRuntimeError("This dict has no key '" + name +
+                                             "' — use get(\"" + name + "\", fallback) when it "
+                                             "might be missing", chunk->lineAt(opOffset));
+                    if (obj->length() >= 0)
+                        reportUnknownMember(obj, name, chunk->lineAt(opOffset));
                     if (obj->type == ToValue::Type::INSTANCE)
                         throw ToRuntimeError("'" + obj->instanceVal->klass->name +
                                              "' instance has no field '" + name + "'",

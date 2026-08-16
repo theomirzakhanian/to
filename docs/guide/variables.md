@@ -46,12 +46,13 @@ x = true
 | `tuple` | `(1, 2, 3)` | Fixed group, usable as a dict key |
 | `set` | `{1, 2, 3}` | Unique values |
 | `dict` | `{name = "Theo"}` | Key-value pairs |
-| `deque` | `deque([1, 2])` | Add and remove at both ends |
-| `queue` | `queue([1, 2])` | First in, first out |
-| `stack` | `stack([1, 2])` | Last in, first out |
-| `heap` | `heap([3, 1])` | Smallest value out first |
+| `queue` | `queue()` | First in, first out |
+| `stack` | `stack()` | Last in, first out |
+| `deque` | `deque()` | Open at both ends |
+| `heap` | `heap()` | Smallest value out first |
 
-See [Collections](collections.md) for what each one can do.
+The same words — `add`, `pop`, `peek`, `has`, `remove`, `.length` — work
+on every one of them. See [Collections](collections.md).
 
 ## Strings
 
@@ -80,13 +81,17 @@ print numbers[0]       ~ 1
 print numbers[-1]      ~ 5 (last element)
 print numbers[1..3]    ~ [2, 3] (slicing)
 
-numbers.add(6)
-numbers.remove(0)
-numbers.pop()
+numbers.add(6)         ~ put 6 on the end
+numbers.remove(6)      ~ take the value 6 back out
+numbers.remove_at(0)   ~ take out whatever is at position 0
+numbers.pop()          ~ take the last one and hand it back
 print numbers.length
 ```
 
-**Methods:** `add`, `remove`, `pop`, `contains`, `join`, `reverse`, `length`
+**Common methods:** `add`, `pop`, `peek`, `has`, `remove`, `sort`, `join`,
+`length`. Run `help(numbers)` to see them all — and see
+[Collections](collections.md), because the same words work on sets,
+queues, stacks and heaps too.
 
 ## Dictionaries
 
@@ -96,7 +101,8 @@ print person.name
 person.age = 19
 ```
 
-**Methods:** `keys`, `values`, `has`
+**Common methods:** `keys`, `values`, `entries`, `get`, `set`, `has`,
+`remove`, `merge`, `length`. Run `help(person)` to see them all.
 
 ## Type Checking
 

@@ -74,6 +74,13 @@ std::string valueTypeName(const ToValue& v) {
     return "unknown";
 }
 
+std::string withArticle(const std::string& typeName) {
+    if (typeName.empty()) return typeName;
+    char c = typeName[0];
+    bool vowel = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+    return (vowel ? "an " : "a ") + typeName;
+}
+
 // ============================================================
 // Equality
 // ============================================================
